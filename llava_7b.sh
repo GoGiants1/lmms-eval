@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ml load cuda/11.8
+
 source .venv/bin/activate
 
 # Set this to a local Hugging Face checkpoint directory (must contain config.json, etc.).
@@ -70,7 +72,7 @@ run_eval() {
 	local output_path="$2"
 	local log_suffix="$3"
 
-	accelerate launch --num_processes="$NUM_PROCESSES" \
+	accelerate launch --config_file miscs/llava_acc_default_config.yaml --num_processes="$NUM_PROCESSES" \
 		-m lmms_eval \
 		--model llava \
 		--model_args pretrained="$model_path",device_map=auto \
