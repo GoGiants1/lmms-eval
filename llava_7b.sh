@@ -87,10 +87,11 @@ esac
 
 # Short stable identifier for the exact task list, useful for W&B grouping.
 TASKS_HASH=${TASKS_HASH:-$(printf '%s' "$TASKS" | sha1sum | cut -c1-8)}
+REPO_ROOT=$(dirname "$(realpath "$0")")
 
 NUM_PROCESSES=${NUM_PROCESSES:-8}
 BATCH_SIZE=${BATCH_SIZE:-1}
-OUTPUT_ROOT=${OUTPUT_ROOT:-./outputs/}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"$REPO_ROOT/outputs/llava_7b_evals/${TASK_SET}_${TASKS_HASH}"}
 LOG_SUFFIX=${LOG_SUFFIX:-llava7b} # FIXME: customize as needed
 
 # Optional Weights & Biases logging.
