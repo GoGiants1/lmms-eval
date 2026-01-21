@@ -2,19 +2,30 @@
 set -euo pipefail
 
 # FIXME: only for cluster with module system (e.g., SLURM)
-ml load cuda/11.8
+# ml load cuda/11.8
 
 source .venv/bin/activate
 
 # Set this to a local Hugging Face checkpoint directory (must contain config.json, etc.).
 # Example: MODEL_PATH=/data/checkpoints/llava-v1.5-7b
 MODEL_PATH=${MODEL_PATH:-liuhaotian/llava-v1.5-7b}
+# Optional: comma-separated list of checkpoints to evaluate.
+# Examples:
+#   MODEL_PATHS=/data/ckpts/llava-v1.5-7b,/data/ckpts/llava-v1.5-7b-lora
+#   MODEL_PATHS=liuhaotian/llava-v1.5-7b,liuhaotian/llava-v1.5-13b
+DEFAULT_MODEL_PATHS=(
+	/mnt/tmp/llava/llava_v1.5_7b_sel_static_r20_s42_merged
+	/mnt/tmp/llava/llava_v1.5_7b_sel_static_r40_s42_merged
+	/mnt/tmp/llava/llava_v1.5_7b_r20_merged
+	/mnt/tmp/llava/llava_v1.5_7b_r40_merged
+)
+MODEL_PATHS=${MODEL_PATHS:-$(IFS=,; echo "${DEFAULT_MODEL_PATHS[*]}")}
 
 # Bulk-eval mode: evaluate every checkpoint directory containing "_merged" under MERGED_ROOT.
 # Example:
 #   EVAL_MERGED=1 MERGED_ROOT=/home/joonki/data/projects/joonki/mllm/llava/checkpoints/finetune ./llava_7b.sh
-EVAL_MERGED=${EVAL_MERGED:-1}
-MERGED_ROOT=${MERGED_ROOT:-/home/joonki/data/projects/joonki/mllm/llava/checkpoints/finetune}
+EVAL_MERGED=${EVAL_MERGED:-0}
+MERGED_ROOT=${MERGED_ROOT:-/mnt/tmp/llava}
 
 # If set, only prints which checkpoints would be evaluated (and in what order), then exits.
 DRY_RUN=${DRY_RUN:-0}
@@ -39,7 +50,7 @@ PRIORITY_FIRST=${PRIORITY_FIRST:-llava_v1.5_7b_sel_static_r20_s42_merged}
 TASK_SET=${TASK_SET:-table1}
 TASKS=${TASKS:-}
 
-TABLE1_TASKS="mme,scienceqa_img,pope,vqav2,textvqa,mmbench_en,gqa,vizwiz_vqa,mmbench_cn,llava_in_the_wild"
+TABLE1_TASKS="vqav2,mme,scienceqa_img,pope,textvqa,mmbench_en,gqa,vizwiz_vqa,mmbench_cn,llava_in_the_wild"
 TABLE7_TASKS="ai2d,chartqa,docvqa,infovqa,naturalbench,realworldqa,cmmmu,mmvet"
 
 # Extra set (mapped from internal benchmark nicknames):
@@ -89,7 +100,7 @@ esac
 TASKS_HASH=${TASKS_HASH:-$(printf '%s' "$TASKS" | sha1sum | cut -c1-8)}
 REPO_ROOT=$(dirname "$(realpath "$0")")
 
-NUM_PROCESSES=${NUM_PROCESSES:-8}
+NUM_PROCESSES=${NUM_PROCESSES:-1}
 BATCH_SIZE=${BATCH_SIZE:-1}
 OUTPUT_ROOT=${OUTPUT_ROOT:-"$REPO_ROOT/outputs/llava_7b_evals/${TASK_SET}_${TASKS_HASH}"}
 LOG_SUFFIX=${LOG_SUFFIX:-llava7b} # FIXME: customize as needed
@@ -106,43 +117,176 @@ WANDB_NOTES=${WANDB_NOTES:-}
 # A stable tag for this script invocation, used to avoid name collisions.
 WANDB_RUN_TAG=${WANDB_RUN_TAG:-${SLURM_JOB_ID:-$(date +%Y%m%d_%H%M%S)}}
 
+# Per-dataset GPU selection: default to CUDA_VISIBLE_DEVICES, else GPU 0.
+GPU_LIST=${GPU_LIST:-${CUDA_VISIBLE_DEVICES:-}}
+GPU_LIST="${GPU_LIST// /}"
+if [[ -z "$GPU_LIST" ]]; then
+	GPU_LIST="0"
+fi
+IFS=',' read -r -a GPU_IDS <<< "$GPU_LIST"
+GPU_COUNT=${#GPU_IDS[@]}
+if [[ "$NUM_PROCESSES" != "1" ]]; then
+	echo "NUM_PROCESSES=$NUM_PROCESSES; forcing to 1 so each dataset uses a single GPU." >&2
+	NUM_PROCESSES=1
+fi
+
+# Run tasks concurrently across GPUs (one task at a time per GPU).
+PARALLEL_TASKS=${PARALLEL_TASKS:-8}
+
+trim_whitespace() {
+	local s="$1"
+	s="${s#"${s%%[![:space:]]*}"}"
+	s="${s%"${s##*[![:space:]]}"}"
+	printf '%s' "$s"
+}
+
+model_tag_for_path() {
+	local path="${1%/}"
+	local tag="${path//\//_}"
+	tag="${tag// /_}"
+	tag="${tag##_}"
+	printf '%s' "$tag"
+}
+
+MODEL_PATHS="${MODEL_PATHS//$'\n'/,}"
+IFS=',' read -r -a _model_path_list <<< "$MODEL_PATHS"
+declare -a MODEL_LIST=()
+for raw_path in "${_model_path_list[@]}"; do
+	model_path="$(trim_whitespace "$raw_path")"
+	[[ -z "$model_path" ]] && continue
+	MODEL_LIST+=("$model_path")
+done
+unset _model_path_list raw_path model_path
+
+if [[ ${#MODEL_LIST[@]} -eq 0 ]]; then
+	echo "No model checkpoints specified. Set MODEL_PATH or MODEL_PATHS." >&2
+	exit 2
+fi
+
 run_eval() {
 	local model_path="$1"
 	local output_path="$2"
 	local log_suffix="$3"
 	local task="$4"
+	local gpu_id="${5:-}"
+	local task_safe
+	task_safe="${task//,/|}"
 	local wandb_args=()
 
 	if [[ "$USE_WANDB" == "1" ]]; then
-		local wandb_name="${WANDB_NAME_PREFIX}-${log_suffix}-${task}-${WANDB_RUN_TAG}"
+		# NOTE: lmms_eval's --wandb_args parser splits on commas, so values must not contain raw commas.
+		# When running multiple tasks at once, "$task" is comma-separated; replace commas in identifiers.
+		local wandb_name="${WANDB_NAME_PREFIX}-${log_suffix}-${task_safe}-${WANDB_RUN_TAG}"
 		local wandb_group="${WANDB_GROUP:-${WANDB_NAME_PREFIX}-${TASK_SET}-${TASKS_HASH}-${WANDB_RUN_TAG}}"
 		# NOTE: lmms_eval's --wandb_args parser splits on commas, so values must not contain raw commas.
 		# TASKS is comma-separated by design; convert commas to '|' for logging.
 		local tasks_for_notes
 		tasks_for_notes="${TASKS//,/|}"
-		local auto_notes="task_set=${TASK_SET};tasks_hash=${TASKS_HASH};task=${task};model_path=${model_path};output_path=${output_path}"
+		local auto_notes="task_set=${TASK_SET};tasks_hash=${TASKS_HASH};task=${task_safe};model_path=${model_path};output_path=${output_path}"
 		local wandb_notes="${auto_notes}"
 		if [[ -n "$WANDB_NOTES" ]]; then
 			local user_notes_sanitized
 			user_notes_sanitized="${WANDB_NOTES//,/;}"
 			wandb_notes+=";user_notes=${user_notes_sanitized}"
 		fi
+		# Absolute safety: ensure the final notes string has no raw commas.
+		wandb_notes="${wandb_notes//,/;}"
 		local wandb_kv="project=${WANDB_PROJECT},name=${wandb_name},group=${wandb_group},job_type=${WANDB_JOB_TYPE}"
 		wandb_kv+=",notes=${wandb_notes}"
 		wandb_args=(--wandb_args "$wandb_kv")
 	fi
 
-	accelerate launch --config_file miscs/llava_acc_default_config.yaml --num_processes="$NUM_PROCESSES" \
-		-m lmms_eval \
-		--model llava \
-		--model_args pretrained="$model_path",device_map=auto \
-		--tasks "$task" \
-		--batch_size "$BATCH_SIZE" \
-		"${wandb_args[@]}" \
-		--log_samples \
-		--log_samples_suffix "${log_suffix}-${task}" \
-		--output_path "$output_path" \
-		--verbosity=DEBUG
+	if [[ -n "$gpu_id" ]]; then
+		CUDA_VISIBLE_DEVICES="$gpu_id" accelerate launch --config_file miscs/llava_acc_default_config.yaml --num_processes="$NUM_PROCESSES" \
+			-m lmms_eval \
+			--model llava \
+			--model_args pretrained="$model_path",device_map=auto \
+			--tasks "$task" \
+			--batch_size "$BATCH_SIZE" \
+			"${wandb_args[@]}" \
+			--log_samples \
+			--log_samples_suffix "${log_suffix}-${task_safe}" \
+			--output_path "$output_path" \
+			--verbosity=DEBUG
+	else
+		accelerate launch --config_file miscs/llava_acc_default_config.yaml --num_processes="$NUM_PROCESSES" \
+			-m lmms_eval \
+			--model llava \
+			--model_args pretrained="$model_path",device_map=auto \
+			--tasks "$task" \
+			--batch_size "$BATCH_SIZE" \
+			"${wandb_args[@]}" \
+			--log_samples \
+			--log_samples_suffix "${log_suffix}-${task_safe}" \
+			--output_path "$output_path" \
+			--verbosity=DEBUG
+	fi
+}
+
+run_tasks_sequential() {
+	local model_path="$1"
+	local output_path="$2"
+	local log_suffix="$3"
+	local tasks_csv="$4"
+	local -a TASK_LIST
+	local task
+	local gpu_id
+
+	IFS=',' read -r -a TASK_LIST <<< "$tasks_csv"
+	for j in "${!TASK_LIST[@]}"; do
+		task="${TASK_LIST[$j]}"
+		gpu_id="${GPU_IDS[$((j % GPU_COUNT))]}"
+		echo "  --- Task [$((j + 1))/${#TASK_LIST[@]}]: $task (GPU $gpu_id)" >&2
+		run_eval "$model_path" "$output_path" "$log_suffix" "$task" "$gpu_id"
+	done
+}
+
+run_tasks_parallel() {
+	local model_path="$1"
+	local output_path="$2"
+	local log_suffix="$3"
+	local tasks_csv="$4"
+	local -a TASK_LIST
+	local -a TASKS_PER_GPU
+	local -a PIDS=()
+	local task raw_task gpu_index gpu_id tasks_for_gpu
+
+	IFS=',' read -r -a TASK_LIST <<< "$tasks_csv"
+
+	for j in "${!TASK_LIST[@]}"; do
+		raw_task="${TASK_LIST[$j]}"
+		task="$(trim_whitespace "$raw_task")"
+		[[ -z "$task" ]] && continue
+		gpu_index=$((j % GPU_COUNT))
+		if [[ -z "${TASKS_PER_GPU[$gpu_index]:-}" ]]; then
+			TASKS_PER_GPU[$gpu_index]="$task"
+		else
+			TASKS_PER_GPU[$gpu_index]+=",$task"
+		fi
+	done
+
+	for gpu_index in "${!GPU_IDS[@]}"; do
+		gpu_id="${GPU_IDS[$gpu_index]}"
+		tasks_for_gpu="${TASKS_PER_GPU[$gpu_index]:-}"
+		[[ -z "$tasks_for_gpu" ]] && continue
+		(
+			local -a GPU_TASK_LIST
+			local t raw_t
+			IFS=',' read -r -a GPU_TASK_LIST <<< "$tasks_for_gpu"
+			for t in "${!GPU_TASK_LIST[@]}"; do
+				raw_t="${GPU_TASK_LIST[$t]}"
+				task="$(trim_whitespace "$raw_t")"
+				[[ -z "$task" ]] && continue
+				echo "  --- Task [GPU $gpu_id/$((t + 1))/${#GPU_TASK_LIST[@]}]: $task" >&2
+				run_eval "$model_path" "$output_path" "$log_suffix" "$task" "$gpu_id"
+			done
+		) &
+		PIDS+=("$!")
+	done
+
+	for pid in "${PIDS[@]}"; do
+		wait "$pid"
+	done
 }
 
 if [[ "$EVAL_MERGED" == "1" ]]; then
@@ -234,16 +378,42 @@ if [[ "$EVAL_MERGED" == "1" ]]; then
 		out_dir="$OUTPUT_ROOT/$ckpt_name/"
 		suffix="$LOG_SUFFIX-$ckpt_name"
 		echo "=== [$((i + 1))/${#MERGED_CKPTS[@]}] Evaluating: $ckpt_dir" >&2
-		
-		# Split TASKS into array and run each task individually
-		IFS=',' read -r -a TASK_LIST <<< "$TASKS"
-		for j in "${!TASK_LIST[@]}"; do
-			task="${TASK_LIST[$j]}"
-			echo "  --- Task [$((j + 1))/${#TASK_LIST[@]}]: $task" >&2
-			run_eval "$ckpt_dir" "$out_dir" "$suffix" "$task"
-		done
+
+		if [[ "$PARALLEL_TASKS" == "1" && "$GPU_COUNT" -gt 1 ]]; then
+			run_tasks_parallel "$ckpt_dir" "$out_dir" "$suffix" "$TASKS"
+		else
+			run_tasks_sequential "$ckpt_dir" "$out_dir" "$suffix" "$TASKS"
+		fi
 	done
 	exit 0
 fi
 
-# run_eval "$MODEL_PATH" "$OUTPUT_ROOT" "$LOG_SUFFIX"
+echo "Found ${#MODEL_LIST[@]} model checkpoints in MODEL_PATHS." >&2
+echo "Tasks: $TASKS" >&2
+echo "Output root: $OUTPUT_ROOT" >&2
+echo "Order:" >&2
+for i in "${!MODEL_LIST[@]}"; do
+	model_path="${MODEL_LIST[$i]}"
+	model_tag="$(model_tag_for_path "$model_path")"
+	printf '  %3d/%3d  %s\n' "$((i + 1))" "${#MODEL_LIST[@]}" "$model_path" >&2
+	echo "         -> output: $OUTPUT_ROOT/$model_tag/" >&2
+done
+
+if [[ "$DRY_RUN" == "1" ]]; then
+	echo "DRY_RUN=1 set; exiting without running eval." >&2
+	exit 0
+fi
+
+for i in "${!MODEL_LIST[@]}"; do
+	model_path="${MODEL_LIST[$i]}"
+	model_tag="$(model_tag_for_path "$model_path")"
+	out_dir="$OUTPUT_ROOT/$model_tag/"
+	suffix="$LOG_SUFFIX-$model_tag"
+	echo "=== [$((i + 1))/${#MODEL_LIST[@]}] Evaluating: $model_path" >&2
+
+	if [[ "$PARALLEL_TASKS" == "1" && "$GPU_COUNT" -gt 1 ]]; then
+		run_tasks_parallel "$model_path" "$out_dir" "$suffix" "$TASKS"
+	else
+		run_tasks_sequential "$model_path" "$out_dir" "$suffix" "$TASKS"
+	fi
+done
