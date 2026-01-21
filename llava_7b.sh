@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# FIXME: only for cluster with module system (e.g., SLURM)
 ml load cuda/11.8
 
 source .venv/bin/activate
@@ -32,17 +33,32 @@ PRIORITY_FIRST=${PRIORITY_FIRST:-llava_v1.5_7b_sel_static_r20_s42_merged}
 # Select task bundle:
 # - TASK_SET=table1   (paper Table 1)
 # - TASK_SET=table7   (paper Table 7)
-# - TASK_SET=all      (table1 + table7)
+# - TASK_SET=all      (table1 + table7 )
+# - TASK_SET=extra    (additional benchmarks; mostly val-only where available)
 # - TASK_SET=custom   (use TASKS=...)
-TASK_SET=${TASK_SET:-table1}
+TASK_SET=${TASK_SET:-all}
 TASKS=${TASKS:-}
 
-TABLE1_TASKS="mme,scienceqa_img,pope,vqav2,textvqa,mmbench_en,gqa,vizwiz_vqa,mmbench_cn" # llava_in_the_wild => need api key
-TABLE7_TASKS="ai2d,chartqa,docvqa,infovqa,naturalbench,realworldqa,cmmmu" # mmvet => need api key
+TABLE1_TASKS="mme,scienceqa_img,pope,vqav2,textvqa,mmbench_en,gqa,vizwiz_vqa,mmbench_cn,llava_in_the_wild"
+TABLE7_TASKS="ai2d,chartqa,docvqa,infovqa,naturalbench,realworldqa,cmmmu,mmvet"
 
+# Extra set (mapped from internal benchmark nicknames):
+# - MMBench_DEV_EN        -> mmbench_en_dev
+# - COCO_VAL              -> coco2014_cap_val (captioning)
+# - MMMU_DEV_VAL          -> mmmu_val
+# - BLINK                 -> blink
+# - InfoVQA_VAL           -> infovqa_val
+# - MathVision            -> mathvision_testmini
+# - SEEDBench_IMG         -> seedbench
+# - MMStar                -> mmstar
+# - MathVista_MINI        -> mathvista_testmini
+# - AMBER                 -> amber_g
+# - VStarBench            -> vstar_bench
+# - TextVQA_VAL           -> textvqa_val
+# - DocVQA_VAL            -> docvqa_val
+# - OCRBench              -> ocrbench
+EXTRA_TASKS="mmbench_en_dev,coco2014_cap_val,mmmu_val,blink,infovqa_val,mathvision_testmini,seedbench,mmstar,mathvista_testmini,amber_g,vstar_bench,textvqa_val,docvqa_val,ocrbench"
 
-export LMMS_EVAL_USE_CACHE=True
-export LMMS_EVAL_HOME="./.lmms_eval_cache"
 
 case "$TASK_SET" in
 	table1)
@@ -54,6 +70,9 @@ case "$TASK_SET" in
 	all)
 		TASKS="$TABLE1_TASKS,$TABLE7_TASKS"
 		;;
+	extra)
+		TASKS="$EXTRA_TASKS"
+		;;
 	custom)
 		if [[ -z "$TASKS" ]]; then
 			echo "TASK_SET=custom requires TASKS=..." >&2
@@ -61,7 +80,7 @@ case "$TASK_SET" in
 		fi
 		;;
 	*)
-		echo "Unknown TASK_SET: $TASK_SET (expected: table1|table7|all|custom)" >&2
+		echo "Unknown TASK_SET: $TASK_SET (expected: table1|table7|all|extra|custom)" >&2
 		exit 2
 		;;
 esac
