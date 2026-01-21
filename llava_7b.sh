@@ -36,7 +36,7 @@ PRIORITY_FIRST=${PRIORITY_FIRST:-llava_v1.5_7b_sel_static_r20_s42_merged}
 # - TASK_SET=all      (table1 + table7 )
 # - TASK_SET=extra    (additional benchmarks; mostly val-only where available)
 # - TASK_SET=custom   (use TASKS=...)
-TASK_SET=${TASK_SET:-all}
+TASK_SET=${TASK_SET:-table1}
 TASKS=${TASKS:-}
 
 TABLE1_TASKS="mme,scienceqa_img,pope,vqav2,textvqa,mmbench_en,gqa,vizwiz_vqa,mmbench_cn,llava_in_the_wild"
@@ -85,15 +85,44 @@ case "$TASK_SET" in
 		;;
 esac
 
+# Short stable identifier for the exact task list, useful for W&B grouping.
+TASKS_HASH=${TASKS_HASH:-$(printf '%s' "$TASKS" | sha1sum | cut -c1-8)}
+
 NUM_PROCESSES=${NUM_PROCESSES:-8}
 BATCH_SIZE=${BATCH_SIZE:-1}
 OUTPUT_ROOT=${OUTPUT_ROOT:-./outputs/}
-LOG_SUFFIX=${LOG_SUFFIX:-llava7b}
+LOG_SUFFIX=${LOG_SUFFIX:-llava7b} # FIXME: customize as needed
+
+# Optional Weights & Biases logging.
+# Enable by setting USE_WANDB=1 and having wandb configured (e.g., WANDB_API_KEY).
+USE_WANDB=${USE_WANDB:-1}
+WANDB_PROJECT=${WANDB_PROJECT:-lmms-eval}
+WANDB_NAME_PREFIX=${WANDB_NAME_PREFIX:-$LOG_SUFFIX}
+WANDB_GROUP=${WANDB_GROUP:-}
+WANDB_JOB_TYPE=${WANDB_JOB_TYPE:-eval}
+WANDB_NOTES=${WANDB_NOTES:-}
+
+# A stable tag for this script invocation, used to avoid name collisions.
+WANDB_RUN_TAG=${WANDB_RUN_TAG:-${SLURM_JOB_ID:-$(date +%Y%m%d_%H%M%S)}}
 
 run_eval() {
 	local model_path="$1"
 	local output_path="$2"
 	local log_suffix="$3"
+	local wandb_args=()
+
+	if [[ "$USE_WANDB" == "1" ]]; then
+		local wandb_name="${WANDB_NAME_PREFIX}-${log_suffix}-${WANDB_RUN_TAG}"
+		local wandb_group="${WANDB_GROUP:-${WANDB_NAME_PREFIX}-${TASK_SET}-${TASKS_HASH}-${WANDB_RUN_TAG}}"
+		local auto_notes="task_set=${TASK_SET};tasks_hash=${TASKS_HASH};tasks=${TASKS};model_path=${model_path};output_path=${output_path}"
+		local wandb_notes="${auto_notes}"
+		if [[ -n "$WANDB_NOTES" ]]; then
+			wandb_notes+=";user_notes=${WANDB_NOTES}"
+		fi
+		local wandb_kv="project=${WANDB_PROJECT},name=${wandb_name},group=${wandb_group},job_type=${WANDB_JOB_TYPE}"
+		wandb_kv+="\,notes=${wandb_notes}"
+		wandb_args=(--wandb_args "$wandb_kv")
+	fi
 
 	accelerate launch --config_file miscs/llava_acc_default_config.yaml --num_processes="$NUM_PROCESSES" \
 		-m lmms_eval \
@@ -101,6 +130,7 @@ run_eval() {
 		--model_args pretrained="$model_path",device_map=auto \
 		--tasks "$TASKS" \
 		--batch_size "$BATCH_SIZE" \
+		"${wandb_args[@]}" \
 		--log_samples \
 		--log_samples_suffix "$log_suffix" \
 		--output_path "$output_path" \
