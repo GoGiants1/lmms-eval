@@ -1,5 +1,6 @@
-# uv venv --python 3.10 --seed
-# git clone git@github.com:haotian-liu/LLaVA.git
+uv venv --python 3.10 --seed
+git clone git@github.com:haotian-liu/LLaVA.git
+
 source .venv/bin/activate
 # install lmms_eval without building dependencies
 UV_HTTP_TIMEOUT=3600
