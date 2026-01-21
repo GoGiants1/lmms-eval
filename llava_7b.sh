@@ -40,6 +40,10 @@ TASKS=${TASKS:-}
 TABLE1_TASKS="mme,scienceqa_img,pope,vqav2,textvqa,mmbench_en,gqa,vizwiz_vqa,mmbench_cn" # llava_in_the_wild => need api key
 TABLE7_TASKS="ai2d,chartqa,docvqa,infovqa,naturalbench,realworldqa,cmmmu" # mmvet => need api key
 
+
+export LMMS_EVAL_USE_CACHE=True
+export LMMS_EVAL_HOME="./.lmms_eval_cache"
+
 case "$TASK_SET" in
 	table1)
 		TASKS="$TABLE1_TASKS"
@@ -64,7 +68,7 @@ esac
 
 NUM_PROCESSES=${NUM_PROCESSES:-8}
 BATCH_SIZE=${BATCH_SIZE:-1}
-OUTPUT_ROOT=${OUTPUT_ROOT:-./logs/}
+OUTPUT_ROOT=${OUTPUT_ROOT:-./outputs/}
 LOG_SUFFIX=${LOG_SUFFIX:-llava7b}
 
 run_eval() {
@@ -80,7 +84,8 @@ run_eval() {
 		--batch_size "$BATCH_SIZE" \
 		--log_samples \
 		--log_samples_suffix "$log_suffix" \
-		--output_path "$output_path"
+		--output_path "$output_path" \
+		--verbosity=DEBUG
 }
 
 if [[ "$EVAL_MERGED" == "1" ]]; then
