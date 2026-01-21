@@ -100,7 +100,7 @@ esac
 TASKS_HASH=${TASKS_HASH:-$(printf '%s' "$TASKS" | sha1sum | cut -c1-8)}
 REPO_ROOT=$(dirname "$(realpath "$0")")
 
-NUM_PROCESSES=${NUM_PROCESSES:-1}
+NUM_PROCESSES=${NUM_PROCESSES:-}
 BATCH_SIZE=${BATCH_SIZE:-1}
 OUTPUT_ROOT=${OUTPUT_ROOT:-"$REPO_ROOT/outputs/llava_7b_evals/${TASK_SET}_${TASKS_HASH}"}
 LOG_SUFFIX=${LOG_SUFFIX:-llava7b} # FIXME: customize as needed
@@ -121,38 +121,44 @@ WANDB_RUN_TAG=${WANDB_RUN_TAG:-${SLURM_JOB_ID:-$(date +%Y%m%d_%H%M%S)}}
 GPU_LIST=${GPU_LIST:-${CUDA_VISIBLE_DEVICES:-}}
 GPU_LIST="${GPU_LIST// /}"
 if [[ -z "$GPU_LIST" ]]; then
-	GPU_LIST="0"
+	if command -v nvidia-smi >/dev/null 2>&1; then
+		gpu_detected_count="$(nvidia-smi -L 2>/dev/null | wc -l | tr -d ' ')"
+		if [[ "$gpu_detected_count" =~ ^[0-9]+$ ]] && [[ "$gpu_detected_count" -gt 0 ]]; then
+			GPU_LIST="$(seq 0 $((gpu_detected_count - 1)) | paste -sd, -)"
+		else
+			GPU_LIST="0"
+		fi
+	else
+		GPU_LIST="0"
+	fi
 fi
 IFS=',' read -r -a GPU_IDS <<< "$GPU_LIST"
 GPU_COUNT=${#GPU_IDS[@]}
-if [[ "$NUM_PROCESSES" != "1" ]]; then
-	echo "NUM_PROCESSES=$NUM_PROCESSES; forcing to 1 so each dataset uses a single GPU." >&2
-	NUM_PROCESSES=1
-fi
 
-# Run tasks concurrently across GPUs (one task at a time per GPU).
-# PARALLEL_TASKS controls the maximum number of concurrent GPU workers per model.
-# - PARALLEL_TASKS=1  -> sequential (even if multiple GPUs are visible)
-# - PARALLEL_TASKS=2  -> use up to 2 GPUs concurrently
-# - PARALLEL_TASKS>=GPU_COUNT -> use all visible GPUs concurrently
-# If unset, defaults to GPU_COUNT.
-PARALLEL_TASKS=${PARALLEL_TASKS:-$GPU_COUNT}
-if ! [[ "$PARALLEL_TASKS" =~ ^[0-9]+$ ]]; then
-	echo "PARALLEL_TASKS must be an integer (got: '$PARALLEL_TASKS')" >&2
+if [[ -z "$NUM_PROCESSES" ]]; then
+	NUM_PROCESSES="$GPU_COUNT"
+fi
+if ! [[ "$NUM_PROCESSES" =~ ^[0-9]+$ ]]; then
+	echo "NUM_PROCESSES must be an integer (got: '$NUM_PROCESSES')" >&2
 	exit 2
 fi
-
-ACTIVE_GPU_COUNT="$GPU_COUNT"
-if [[ "$PARALLEL_TASKS" -gt 0 && "$PARALLEL_TASKS" -lt "$GPU_COUNT" ]]; then
-	ACTIVE_GPU_COUNT="$PARALLEL_TASKS"
+if [[ "$NUM_PROCESSES" -lt 1 ]]; then
+	echo "NUM_PROCESSES must be >= 1 (got: '$NUM_PROCESSES')" >&2
+	exit 2
 fi
+if [[ "$NUM_PROCESSES" -gt "$GPU_COUNT" ]]; then
+	echo "NUM_PROCESSES=$NUM_PROCESSES > GPU_COUNT=$GPU_COUNT; clamping to $GPU_COUNT." >&2
+	NUM_PROCESSES="$GPU_COUNT"
+fi
+
 declare -a ACTIVE_GPU_IDS=()
 for i in "${!GPU_IDS[@]}"; do
-	if [[ "$i" -ge "$ACTIVE_GPU_COUNT" ]]; then
+	if [[ "$i" -ge "$NUM_PROCESSES" ]]; then
 		break
 	fi
 	ACTIVE_GPU_IDS+=("${GPU_IDS[$i]}")
 done
+ACTIVE_GPU_LIST="$(IFS=,; echo "${ACTIVE_GPU_IDS[*]}")"
 
 trim_whitespace() {
 	local s="$1"
@@ -189,7 +195,6 @@ run_eval() {
 	local output_path="$2"
 	local log_suffix="$3"
 	local task="$4"
-	local gpu_id="${5:-}"
 	local task_safe
 	task_safe="${task//,/|}"
 	local wandb_args=()
@@ -217,96 +222,32 @@ run_eval() {
 		wandb_args=(--wandb_args "$wandb_kv")
 	fi
 
-	if [[ -n "$gpu_id" ]]; then
-		CUDA_VISIBLE_DEVICES="$gpu_id" accelerate launch --config_file miscs/llava_acc_default_config.yaml --num_processes="$NUM_PROCESSES" \
-			-m lmms_eval \
-			--model llava \
-			--model_args pretrained="$model_path",device_map=auto \
-			--tasks "$task" \
-			--batch_size "$BATCH_SIZE" \
-			"${wandb_args[@]}" \
-			--log_samples \
-			--log_samples_suffix "${log_suffix}-${task_safe}" \
-			--output_path "$output_path" \
-			--verbosity=DEBUG
-	else
-		accelerate launch --config_file miscs/llava_acc_default_config.yaml --num_processes="$NUM_PROCESSES" \
-			-m lmms_eval \
-			--model llava \
-			--model_args pretrained="$model_path",device_map=auto \
-			--tasks "$task" \
-			--batch_size "$BATCH_SIZE" \
-			"${wandb_args[@]}" \
-			--log_samples \
-			--log_samples_suffix "${log_suffix}-${task_safe}" \
-			--output_path "$output_path" \
-			--verbosity=DEBUG
-	fi
+	CUDA_VISIBLE_DEVICES="$ACTIVE_GPU_LIST" accelerate launch --config_file miscs/llava_acc_default_config.yaml --num_processes="$NUM_PROCESSES" \
+		-m lmms_eval \
+		--model llava \
+		--model_args pretrained="$model_path",device_map=auto \
+		--tasks "$task" \
+		--batch_size "$BATCH_SIZE" \
+		"${wandb_args[@]}" \
+		--log_samples \
+		--log_samples_suffix "${log_suffix}-${task_safe}" \
+		--output_path "$output_path" \
+		--verbosity=DEBUG
 }
 
-run_tasks_sequential() {
+run_tasks() {
 	local model_path="$1"
 	local output_path="$2"
 	local log_suffix="$3"
 	local tasks_csv="$4"
 	local -a TASK_LIST
 	local task
-	local gpu_id
 
 	IFS=',' read -r -a TASK_LIST <<< "$tasks_csv"
 	for j in "${!TASK_LIST[@]}"; do
 		task="${TASK_LIST[$j]}"
-		gpu_id="${ACTIVE_GPU_IDS[$((j % ACTIVE_GPU_COUNT))]}"
-		echo "  --- Task [$((j + 1))/${#TASK_LIST[@]}]: $task (GPU $gpu_id)" >&2
-		run_eval "$model_path" "$output_path" "$log_suffix" "$task" "$gpu_id"
-	done
-}
-
-run_tasks_parallel() {
-	local model_path="$1"
-	local output_path="$2"
-	local log_suffix="$3"
-	local tasks_csv="$4"
-	local -a TASK_LIST
-	local -a TASKS_PER_GPU
-	local -a PIDS=()
-	local task raw_task gpu_index gpu_id tasks_for_gpu
-
-	IFS=',' read -r -a TASK_LIST <<< "$tasks_csv"
-
-	for j in "${!TASK_LIST[@]}"; do
-		raw_task="${TASK_LIST[$j]}"
-		task="$(trim_whitespace "$raw_task")"
-		[[ -z "$task" ]] && continue
-		gpu_index=$((j % ACTIVE_GPU_COUNT))
-		if [[ -z "${TASKS_PER_GPU[$gpu_index]:-}" ]]; then
-			TASKS_PER_GPU[$gpu_index]="$task"
-		else
-			TASKS_PER_GPU[$gpu_index]+=",$task"
-		fi
-	done
-
-	for gpu_index in "${!ACTIVE_GPU_IDS[@]}"; do
-		gpu_id="${ACTIVE_GPU_IDS[$gpu_index]}"
-		tasks_for_gpu="${TASKS_PER_GPU[$gpu_index]:-}"
-		[[ -z "$tasks_for_gpu" ]] && continue
-		(
-			local -a GPU_TASK_LIST
-			local t raw_t
-			IFS=',' read -r -a GPU_TASK_LIST <<< "$tasks_for_gpu"
-			for t in "${!GPU_TASK_LIST[@]}"; do
-				raw_t="${GPU_TASK_LIST[$t]}"
-				task="$(trim_whitespace "$raw_t")"
-				[[ -z "$task" ]] && continue
-				echo "  --- Task [GPU $gpu_id/$((t + 1))/${#GPU_TASK_LIST[@]}]: $task" >&2
-				run_eval "$model_path" "$output_path" "$log_suffix" "$task" "$gpu_id"
-			done
-		) &
-		PIDS+=("$!")
-	done
-
-	for pid in "${PIDS[@]}"; do
-		wait "$pid"
+		echo "  --- Task [$((j + 1))/${#TASK_LIST[@]}]: $task (DP=$NUM_PROCESSES, GPUs=$ACTIVE_GPU_LIST)" >&2
+		run_eval "$model_path" "$output_path" "$log_suffix" "$task"
 	done
 }
 
@@ -379,7 +320,7 @@ if [[ "$EVAL_MERGED" == "1" ]]; then
 	echo "Found ${#MERGED_CKPTS[@]} merged checkpoints under: $MERGED_ROOT" >&2
 	echo "Tasks: $TASKS" >&2
 	echo "GPUs (visible): ${GPU_IDS[*]}" >&2
-	echo "GPUs (active):  ${ACTIVE_GPU_IDS[*]} (PARALLEL_TASKS=$PARALLEL_TASKS)" >&2
+	echo "GPUs (active):  ${ACTIVE_GPU_IDS[*]} (NUM_PROCESSES=$NUM_PROCESSES)" >&2
 	echo "Output root: $OUTPUT_ROOT" >&2
 	echo "Order (SORT_MODE=$SORT_MODE):" >&2
 	for i in "${!MERGED_CKPTS[@]}"; do
@@ -402,11 +343,7 @@ if [[ "$EVAL_MERGED" == "1" ]]; then
 		suffix="$LOG_SUFFIX-$ckpt_name"
 		echo "=== [$((i + 1))/${#MERGED_CKPTS[@]}] Evaluating: $ckpt_dir" >&2
 
-		if [[ "$ACTIVE_GPU_COUNT" -gt 1 ]]; then
-			run_tasks_parallel "$ckpt_dir" "$out_dir" "$suffix" "$TASKS"
-		else
-			run_tasks_sequential "$ckpt_dir" "$out_dir" "$suffix" "$TASKS"
-		fi
+		run_tasks "$ckpt_dir" "$out_dir" "$suffix" "$TASKS"
 	done
 	exit 0
 fi
@@ -414,7 +351,7 @@ fi
 echo "Found ${#MODEL_LIST[@]} model checkpoints in MODEL_PATHS." >&2
 echo "Tasks: $TASKS" >&2
 echo "GPUs (visible): ${GPU_IDS[*]}" >&2
-echo "GPUs (active):  ${ACTIVE_GPU_IDS[*]} (PARALLEL_TASKS=$PARALLEL_TASKS)" >&2
+echo "GPUs (active):  ${ACTIVE_GPU_IDS[*]} (NUM_PROCESSES=$NUM_PROCESSES)" >&2
 echo "Output root: $OUTPUT_ROOT" >&2
 echo "Order:" >&2
 for i in "${!MODEL_LIST[@]}"; do
@@ -436,9 +373,5 @@ for i in "${!MODEL_LIST[@]}"; do
 	suffix="$LOG_SUFFIX-$model_tag"
 	echo "=== [$((i + 1))/${#MODEL_LIST[@]}] Evaluating: $model_path" >&2
 
-	if [[ "$ACTIVE_GPU_COUNT" -gt 1 ]]; then
-		run_tasks_parallel "$model_path" "$out_dir" "$suffix" "$TASKS"
-	else
-		run_tasks_sequential "$model_path" "$out_dir" "$suffix" "$TASKS"
-	fi
+	run_tasks "$model_path" "$out_dir" "$suffix" "$TASKS"
 done
