@@ -162,6 +162,22 @@ if [[ "$EVAL_MERGED" == "1" ]]; then
 		exit 2
 	fi
 
+	# Auto-prioritize checkpoints whose basename contains the pattern r{int}_s{int}.
+	# Example: llava_v1.5_7b_sel_static_r20_s42_merged
+	# This makes those runs get evaluated first without requiring PRIORITY_FIRST.
+	declare -a _rs_first=()
+	declare -a _rs_rest=()
+	for ckpt_dir in "${MERGED_CKPTS[@]}"; do
+		ckpt_base="$(basename "$ckpt_dir")"
+		if [[ "$ckpt_base" =~ r[0-9]+_s[0-9]+ ]]; then
+			_rs_first+=("$ckpt_dir")
+		else
+			_rs_rest+=("$ckpt_dir")
+		fi
+	done
+	MERGED_CKPTS=("${_rs_first[@]}" "${_rs_rest[@]}")
+	unset _rs_first _rs_rest
+
 	if [[ -n "$PRIORITY_FIRST" ]]; then
 		IFS=',' read -r -a _priority_patterns <<< "$PRIORITY_FIRST"
 		declare -a _prioritized=()
