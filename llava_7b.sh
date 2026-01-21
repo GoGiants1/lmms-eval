@@ -16,8 +16,8 @@ MODEL_PATH=${MODEL_PATH:-liuhaotian/llava-v1.5-7b}
 DEFAULT_MODEL_PATHS=(
 	/mnt/tmp/llava/llava_v1.5_7b_sel_static_r20_s42_merged
 	/mnt/tmp/llava/llava_v1.5_7b_sel_static_r40_s42_merged
-	/mnt/tmp/llava/llava_v1.5_7b_r20_merged
-	/mnt/tmp/llava/llava_v1.5_7b_r40_merged
+	# /mnt/tmp/llava/llava_v1.5_7b_r20_merged
+	# /mnt/tmp/llava/llava_v1.5_7b_r40_merged
 )
 MODEL_PATHS=${MODEL_PATHS:-$(IFS=,; echo "${DEFAULT_MODEL_PATHS[*]}")}
 
