@@ -110,16 +110,17 @@ run_eval() {
 	local model_path="$1"
 	local output_path="$2"
 	local log_suffix="$3"
+	local task="$4"
 	local wandb_args=()
 
 	if [[ "$USE_WANDB" == "1" ]]; then
-		local wandb_name="${WANDB_NAME_PREFIX}-${log_suffix}-${WANDB_RUN_TAG}"
+		local wandb_name="${WANDB_NAME_PREFIX}-${log_suffix}-${task}-${WANDB_RUN_TAG}"
 		local wandb_group="${WANDB_GROUP:-${WANDB_NAME_PREFIX}-${TASK_SET}-${TASKS_HASH}-${WANDB_RUN_TAG}}"
 		# NOTE: lmms_eval's --wandb_args parser splits on commas, so values must not contain raw commas.
 		# TASKS is comma-separated by design; convert commas to '|' for logging.
 		local tasks_for_notes
 		tasks_for_notes="${TASKS//,/|}"
-		local auto_notes="task_set=${TASK_SET};tasks_hash=${TASKS_HASH};tasks=${tasks_for_notes};model_path=${model_path};output_path=${output_path}"
+		local auto_notes="task_set=${TASK_SET};tasks_hash=${TASKS_HASH};task=${task};model_path=${model_path};output_path=${output_path}"
 		local wandb_notes="${auto_notes}"
 		if [[ -n "$WANDB_NOTES" ]]; then
 			local user_notes_sanitized
@@ -135,11 +136,11 @@ run_eval() {
 		-m lmms_eval \
 		--model llava \
 		--model_args pretrained="$model_path",device_map=auto \
-		--tasks "$TASKS" \
+		--tasks "$task" \
 		--batch_size "$BATCH_SIZE" \
 		"${wandb_args[@]}" \
 		--log_samples \
-		--log_samples_suffix "$log_suffix" \
+		--log_samples_suffix "${log_suffix}-${task}" \
 		--output_path "$output_path" \
 		--verbosity=DEBUG
 }
@@ -233,7 +234,14 @@ if [[ "$EVAL_MERGED" == "1" ]]; then
 		out_dir="$OUTPUT_ROOT/$ckpt_name/"
 		suffix="$LOG_SUFFIX-$ckpt_name"
 		echo "=== [$((i + 1))/${#MERGED_CKPTS[@]}] Evaluating: $ckpt_dir" >&2
-		run_eval "$ckpt_dir" "$out_dir" "$suffix"
+		
+		# Split TASKS into array and run each task individually
+		IFS=',' read -r -a TASK_LIST <<< "$TASKS"
+		for j in "${!TASK_LIST[@]}"; do
+			task="${TASK_LIST[$j]}"
+			echo "  --- Task [$((j + 1))/${#TASK_LIST[@]}]: $task" >&2
+			run_eval "$ckpt_dir" "$out_dir" "$suffix" "$task"
+		done
 	done
 	exit 0
 fi
