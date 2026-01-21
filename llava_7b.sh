@@ -114,13 +114,19 @@ run_eval() {
 	if [[ "$USE_WANDB" == "1" ]]; then
 		local wandb_name="${WANDB_NAME_PREFIX}-${log_suffix}-${WANDB_RUN_TAG}"
 		local wandb_group="${WANDB_GROUP:-${WANDB_NAME_PREFIX}-${TASK_SET}-${TASKS_HASH}-${WANDB_RUN_TAG}}"
-		local auto_notes="task_set=${TASK_SET};tasks_hash=${TASKS_HASH};tasks=${TASKS};model_path=${model_path};output_path=${output_path}"
+		# NOTE: lmms_eval's --wandb_args parser splits on commas, so values must not contain raw commas.
+		# TASKS is comma-separated by design; convert commas to '|' for logging.
+		local tasks_for_notes
+		tasks_for_notes="${TASKS//,/|}"
+		local auto_notes="task_set=${TASK_SET};tasks_hash=${TASKS_HASH};tasks=${tasks_for_notes};model_path=${model_path};output_path=${output_path}"
 		local wandb_notes="${auto_notes}"
 		if [[ -n "$WANDB_NOTES" ]]; then
-			wandb_notes+=";user_notes=${WANDB_NOTES}"
+			local user_notes_sanitized
+			user_notes_sanitized="${WANDB_NOTES//,/;}"
+			wandb_notes+=";user_notes=${user_notes_sanitized}"
 		fi
 		local wandb_kv="project=${WANDB_PROJECT},name=${wandb_name},group=${wandb_group},job_type=${WANDB_JOB_TYPE}"
-		wandb_kv+="\,notes=${wandb_notes}"
+		wandb_kv+=",notes=${wandb_notes}"
 		wandb_args=(--wandb_args "$wandb_kv")
 	fi
 
