@@ -63,7 +63,7 @@ TASK_SET=${TASK_SET:-table1}
 TASKS=${TASKS:-}
 
 TABLE1_TASKS="vqav2_test,mme,scienceqa_img,pope,textvqa,mmbench_en,gqa,vizwiz_vqa,mmbench_cn,llava_in_the_wild"
-TABLE7_TASKS="ai2d,chartqa,docvqa,infovqa,naturalbench,realworldqa,cmmmu,mmvet"
+TABLE7_TASKS="ai2d,chartqa,docvqa,infovqa,naturalbench,realworldqa,cmmmu,mmvet,mmmu_val,mathvision_testmini,mmstar,mathvista_testmini"
 SINGLE_PROCESS_TASKS="naturalbench"
 # Extra set (mapped from internal benchmark nicknames):
 # - MMBench_DEV_EN        -> mmbench_en_dev
@@ -80,7 +80,7 @@ SINGLE_PROCESS_TASKS="naturalbench"
 # - TextVQA_VAL           -> textvqa_val
 # - DocVQA_VAL            -> docvqa_val
 # - OCRBench              -> ocrbench
-EXTRA_TASKS="mmbench_en_dev,coco2014_cap_val,mmmu_val,blink,infovqa_val,mathvision_testmini,seedbench,mmstar,mathvista_testmini,amber_g,vstar_bench,textvqa_val,docvqa_val,ocrbench"
+EXTRA_TASKS="coco2014_cap_val,blink,infovqa_val,seedbench,amber_g,vstar_bench,ocrbench"
 
 
 case "$TASK_SET" in
@@ -232,13 +232,15 @@ run_eval() {
 		wandb_kv+=",notes=${wandb_notes}"
 		wandb_args=(--wandb_args "$wandb_kv")
 	fi
+	local effective_num_processes="$NUM_PROCESSES"
+	local effective_gpu_list="$ACTIVE_GPU_LIST"
 	# Run evaluation for a single process(GPU) task
 	if [[ " $SINGLE_PROCESS_TASKS " == *" $task "* ]]; then
-		echo "    -> Single-process task detected; overriding NUM_PROCESSES=1 and ACTIVE_GPU_LIST=${ACTIVE_GPU_IDS[0]}" >&2
-		NUM_PROCESSES=1
-		ACTIVE_GPU_LIST="${ACTIVE_GPU_IDS[0]}"
+		effective_num_processes=1
+		effective_gpu_list="${ACTIVE_GPU_IDS[0]}"
+		echo "    -> Single-process task detected; using NUM_PROCESSES=1 and ACTIVE_GPU_LIST=${effective_gpu_list} for this task" >&2
 	fi
-	CUDA_VISIBLE_DEVICES="$ACTIVE_GPU_LIST" accelerate launch --config_file miscs/llava_acc_default_config.yaml --num_processes="$NUM_PROCESSES" \
+	CUDA_VISIBLE_DEVICES="$effective_gpu_list" accelerate launch --config_file miscs/llava_acc_default_config.yaml --num_processes="$effective_num_processes" \
 		-m lmms_eval \
 		--model llava \
 		--model_args pretrained="$model_path",device_map=auto \
