@@ -22,10 +22,11 @@ MODEL_PATH=${MODEL_PATH:-liuhaotian/llava-v1.5-7b}
 #   MODEL_PATHS=/data/ckpts/llava-v1.5-7b,/data/ckpts/llava-v1.5-7b-lora
 #   MODEL_PATHS=liuhaotian/llava-v1.5-7b,liuhaotian/llava-v1.5-13b
 DEFAULT_MODEL_PATHS=(
+	liuhaotian/llava-v1.5-7b
 	/mnt/tmp/llava/llava_v1.5_7b_sel_static_r20_s42_merged
 	/mnt/tmp/llava/llava_v1.5_7b_sel_static_r40_s42_merged
-	# /mnt/tmp/llava/llava_v1.5_7b_r20_merged
-	# /mnt/tmp/llava/llava_v1.5_7b_r40_merged
+	/mnt/tmp/llava/llava_v1.5_7b_r20_merged
+	/mnt/tmp/llava/llava_v1.5_7b_r40_merged
 )
 MODEL_PATHS=${MODEL_PATHS:-$(IFS=,; echo "${DEFAULT_MODEL_PATHS[*]}")}
 
