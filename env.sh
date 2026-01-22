@@ -4,18 +4,19 @@ git clone git@github.com:haotian-liu/LLaVA.git
 source .venv/bin/activate
 # install lmms_eval without building dependencies
 UV_HTTP_TIMEOUT=3600
-uv pip install --no-deps -U -e ".[all]"
-uv pip install loguru wandb nltk spacy
-uv pip install httpx==0.23.3
+uv pip install -e ".[all]"
+# uv pip install loguru wandb nltk spacy
+# uv pip install httpx==0.23.3
 
 # install LLaVA without building dependencies
 cd LLaVA
-uv pip install --no-deps -U -e .
+uv pip install -e .
+
 
 cd ..
 
 # install all the requirements that require for reproduce llava results
-uv pip install -r miscs/llava_repr_requirements.txt
+# uv pip install -r miscs/llava_repr_requirements.txt
 
 # Run and exactly reproduce llava_v1.5 results!
 # mme as an example
