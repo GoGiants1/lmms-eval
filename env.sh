@@ -5,7 +5,7 @@ source .venv/bin/activate
 # install lmms_eval without building dependencies
 UV_HTTP_TIMEOUT=3600
 uv pip install --no-deps -U -e ".[all]"
-uv pip install loguru wandb nltk
+uv pip install loguru wandb nltk spacy
 uv pip install httpx==0.23.3
 
 # install LLaVA without building dependencies
