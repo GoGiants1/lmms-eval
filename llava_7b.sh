@@ -105,12 +105,11 @@ case "$TASK_SET" in
 esac
 
 # Short stable identifier for the exact task list, useful for W&B grouping.
-TASKS_HASH=${TASKS_HASH:-$(printf '%s' "$TASKS" | sha1sum | cut -c1-8)}
 REPO_ROOT=$(dirname "$(realpath "$0")")
 
 NUM_PROCESSES=${NUM_PROCESSES:-}
 BATCH_SIZE=${BATCH_SIZE:-1}
-OUTPUT_ROOT=${OUTPUT_ROOT:-"$REPO_ROOT/outputs/llava_7b_evals/${TASK_SET}_${TASKS_HASH}"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"$REPO_ROOT/outputs/llava_7b_evals/${TASK_SET}"}
 LOG_SUFFIX=${LOG_SUFFIX:-llava7b} # FIXME: customize as needed
 
 # Optional Weights & Biases logging.
@@ -211,12 +210,12 @@ run_eval() {
 		# NOTE: lmms_eval's --wandb_args parser splits on commas, so values must not contain raw commas.
 		# When running multiple tasks at once, "$task" is comma-separated; replace commas in identifiers.
 		local wandb_name="${WANDB_NAME_PREFIX}-${log_suffix}-${task_safe}-${WANDB_RUN_TAG}"
-		local wandb_group="${WANDB_GROUP:-${WANDB_NAME_PREFIX}-${TASK_SET}-${TASKS_HASH}-${WANDB_RUN_TAG}}"
+		local wandb_group="${WANDB_GROUP:-${WANDB_NAME_PREFIX}-${TASK_SET}-${WANDB_RUN_TAG}}"
 		# NOTE: lmms_eval's --wandb_args parser splits on commas, so values must not contain raw commas.
 		# TASKS is comma-separated by design; convert commas to '|' for logging.
 		local tasks_for_notes
 		tasks_for_notes="${TASKS//,/|}"
-		local auto_notes="task_set=${TASK_SET};tasks_hash=${TASKS_HASH};task=${task_safe};model_path=${model_path};output_path=${output_path}"
+		local auto_notes="task_set=${TASK_SET};task=${task_safe};model_path=${model_path};output_path=${output_path}"
 		local wandb_notes="${auto_notes}"
 		if [[ -n "$WANDB_NOTES" ]]; then
 			local user_notes_sanitized
