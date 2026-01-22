@@ -6,6 +6,14 @@ set -euo pipefail
 
 source .venv/bin/activate
 
+ENV_FILE="${ENV_FILE:-.env}"
+
+if [ -f "$ENV_FILE" ]; then
+  set -o allexport
+  source "$ENV_FILE"
+  set +o allexport
+fi
+
 # Set this to a local Hugging Face checkpoint directory (must contain config.json, etc.).
 # Example: MODEL_PATH=/data/checkpoints/llava-v1.5-7b
 MODEL_PATH=${MODEL_PATH:-liuhaotian/llava-v1.5-7b}
