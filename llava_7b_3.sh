@@ -21,15 +21,11 @@ MODEL_PATH=${MODEL_PATH:-liuhaotian/llava-v1.5-7b}
 # Examples:
 #   MODEL_PATHS=/data/ckpts/llava-v1.5-7b,/data/ckpts/llava-v1.5-7b-lora
 #   MODEL_PATHS=liuhaotian/llava-v1.5-7b,liuhaotian/llava-v1.5-13b
-
 MODEL_BASE_PATHS=${MODEL_BASE_PATHS:-/mnt/tmp/llava}
 
 DEFAULT_MODEL_PATHS=(
-	liuhaotian/llava-v1.5-7b
-	"$MODEL_BASE_PATHS/llava_v1.5_7b_sel_static_r20_s42_merged"
-	"$MODEL_BASE_PATHS/llava_v1.5_7b_sel_static_r40_s42_merged"
-	"$MODEL_BASE_PATHS/llava_v1.5_7b_r20_merged"
-	"$MODEL_BASE_PATHS/llava_v1.5_7b_r40_merged"
+  "$MODEL_BASE_PATHS/llava_v1.5_7b_sel_static_range200_r20_s42_merged"
+  "$MODEL_BASE_PATHS/llava_v1.5_7b_sel_static_range200_r40_s42_merged"
 )
 MODEL_PATHS=${MODEL_PATHS:-$(IFS=,; echo "${DEFAULT_MODEL_PATHS[*]}")}
 
@@ -59,10 +55,10 @@ PRIORITY_FIRST=${PRIORITY_FIRST:-llava_v1.5_7b_sel_static_r20_s42_merged}
 # - TASK_SET=all      (table1 + table7 )
 # - TASK_SET=extra    (additional benchmarks; mostly val-only where available)
 # - TASK_SET=custom   (use TASKS=...)
-TASK_SET=${TASK_SET:-table1}
+TASK_SET=${TASK_SET:-all}
 TASKS=${TASKS:-}
 
-TABLE1_TASKS="vqav2_test,mme,scienceqa_img,pope,textvqa,mmbench_en,gqa,vizwiz_vqa,mmbench_cn,llava_in_the_wild"
+TABLE1_TASKS="mme,scienceqa_img,pope,textvqa,mmbench_en,gqa,vizwiz_vqa,mmbench_cn,llava_in_the_wild,vqa_v2_test"
 TABLE7_TASKS="ai2d,chartqa,docvqa,infovqa,naturalbench,realworldqa,cmmmu,mmvet"
 
 # Extra set (mapped from internal benchmark nicknames):
