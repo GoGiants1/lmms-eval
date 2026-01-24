@@ -59,7 +59,7 @@ PRIORITY_FIRST=${PRIORITY_FIRST:-llava_v1.5_7b_sel_static_r20_s42_merged}
 # - TASK_SET=all      (table1 + table7 )
 # - TASK_SET=extra    (additional benchmarks; mostly val-only where available)
 # - TASK_SET=custom   (use TASKS=...)
-TASK_SET=${TASK_SET:-table1}
+TASK_SET=${TASK_SET:-all}
 TASKS=${TASKS:-}
 
 TABLE1_TASKS="vqav2_test,mme,scienceqa_img,pope,textvqa,mmbench_en,gqa,vizwiz_vqa,mmbench_cn,llava_in_the_wild"
