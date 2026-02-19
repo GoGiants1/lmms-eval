@@ -4,6 +4,8 @@ torch.backends.cuda.matmul.allow_tf32 = True
 
 
 import copy
+import json
+import os
 import warnings
 from datetime import timedelta
 from typing import List, Optional, Tuple, Union
@@ -44,6 +46,38 @@ else:
     best_fit_attn_implementation = "eager"
 
 
+def _resolve_model_base(pretrained: str, model_base: Optional[str]) -> Optional[str]:
+    if model_base:
+        return model_base
+
+    if not isinstance(pretrained, str) or not os.path.isdir(pretrained):
+        return None
+
+    candidate_dirs = [pretrained]
+    parent_dir = os.path.dirname(pretrained.rstrip(os.sep))
+    if parent_dir and parent_dir != pretrained:
+        candidate_dirs.append(parent_dir)
+
+    for candidate_dir in candidate_dirs:
+        adapter_config_path = os.path.join(candidate_dir, "adapter_config.json")
+        if not os.path.isfile(adapter_config_path):
+            continue
+
+        try:
+            with open(adapter_config_path, "r", encoding="utf-8") as file:
+                adapter_config = json.load(file)
+        except Exception as error:
+            eval_logger.warning("Failed to parse adapter config at {}: {}", adapter_config_path, error)
+            continue
+
+        inferred_model_base = adapter_config.get("base_model_name_or_path")
+        if isinstance(inferred_model_base, str) and inferred_model_base.strip():
+            eval_logger.info("Inferred model_base '{}' from {}", inferred_model_base, adapter_config_path)
+            return inferred_model_base
+
+    return None
+
+
 @register_model("llava")
 class Llava(lmms):
     """
@@ -57,6 +91,7 @@ class Llava(lmms):
         device: Optional[str] = "cuda:0",
         batch_size: Optional[Union[int, str]] = 1,
         model_name=None,
+        model_base: Optional[str] = None,
         attn_implementation=best_fit_attn_implementation,
         device_map="cuda:0",
         conv_template="vicuna_v1",
@@ -93,13 +128,14 @@ class Llava(lmms):
         if "use_flash_attention_2" in kwargs:
             llava_model_args["use_flash_attention_2"] = kwargs["use_flash_attention_2"]
         model_name = model_name if model_name is not None else get_model_name_from_path(pretrained)
+        resolved_model_base = _resolve_model_base(pretrained, model_base)
         try:
             # Try to load the model with the multimodal argument
-            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, model_name, device_map=self.device_map, **llava_model_args)
+            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, resolved_model_base, model_name, device_map=self.device_map, **llava_model_args)
         except TypeError:
             # for older versions of LLaVA that don't have multimodal argument
             llava_model_args.pop("multimodal", None)
-            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, model_name, device_map=self.device_map, **llava_model_args)
+            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, resolved_model_base, model_name, device_map=self.device_map, **llava_model_args)
         self._config = self._model.config
         self.model.eval()
         if tie_weights:

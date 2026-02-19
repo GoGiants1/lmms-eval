@@ -22,6 +22,7 @@ MODEL_PATH=${MODEL_PATH:-liuhaotian/llava-v1.5-7b}
 #   MODEL_PATHS=/data/ckpts/llava-v1.5-7b,/data/ckpts/llava-v1.5-7b-lora
 #   MODEL_PATHS=liuhaotian/llava-v1.5-7b,liuhaotian/llava-v1.5-13b
 MODEL_BASE_PATHS=${MODEL_BASE_PATHS:-/mnt/tmp/llava}
+MODEL_BASE=${MODEL_BASE:-}
 
 DEFAULT_MODEL_PATHS=(
   "$MODEL_BASE_PATHS/llava_v1.5_7b_sel_static_range200_r20_s42_merged"
@@ -218,9 +219,14 @@ run_eval() {
 	local output_path="$2"
 	local log_suffix="$3"
 	local task="$4"
+	local model_args
 	local task_safe
 	task_safe="${task//,/|}"
 	local wandb_args=()
+	model_args="pretrained=${model_path},device_map=auto"
+	if [[ -n "$MODEL_BASE" ]]; then
+		model_args+=",model_base=${MODEL_BASE}"
+	fi
 
 	if [[ "$USE_WANDB" == "1" ]]; then
 		# NOTE: lmms_eval's --wandb_args parser splits on commas, so values must not contain raw commas.
@@ -255,7 +261,7 @@ run_eval() {
 	CUDA_VISIBLE_DEVICES="$effective_gpu_list" accelerate launch --config_file miscs/llava_acc_default_config.yaml --num_processes="$effective_num_processes" \
 		-m lmms_eval \
 		--model llava \
-		--model_args pretrained="$model_path",device_map=auto \
+		--model_args "$model_args" \
 		--tasks "$task" \
 		--batch_size "$BATCH_SIZE" \
 		"${wandb_args[@]}" \

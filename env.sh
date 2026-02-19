@@ -16,7 +16,7 @@ uv pip install -e .
 cd ..
 
 # install all the requirements that require for reproduce llava results
-# uv pip install -r miscs/llava_repr_requirements.txt
+uv pip install -r miscs/llava_repr_requirements.txt
 
 # Run and exactly reproduce llava_v1.5 results!
 # mme as an example
