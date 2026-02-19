@@ -12,18 +12,10 @@ DATE_RE = re.compile(r"^(\\d{8}_\\d{6})_results\\.json$")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Aggregate *_results.json into a single CSV."
-    )
-    parser.add_argument(
-        "--root", default="outputs", help="Root directory to search for *_results.json"
-    )
-    parser.add_argument(
-        "--out", default="outputs/llava_7b_evals/summary.csv", help="Output CSV path"
-    )
-    parser.add_argument(
-        "--metrics-out", default=None, help="Output JSON path for metric selection"
-    )
+    parser = argparse.ArgumentParser(description="Aggregate *_results.json into a single CSV.")
+    parser.add_argument("--root", default="outputs", help="Root directory to search for *_results.json")
+    parser.add_argument("--out", default="outputs/llava_7b_evals/summary.csv", help="Output CSV path")
+    parser.add_argument("--metrics-out", default=None, help="Output JSON path for metric selection")
     return parser.parse_args()
 
 
@@ -58,9 +50,7 @@ def numeric_keys(result_obj: Dict[str, Any]) -> list:
     return keys
 
 
-def pick_metric(
-    task: str, result_obj: Dict[str, Any], config_obj: Dict[str, Any]
-) -> Tuple[float, str]:
+def pick_metric(task: str, result_obj: Dict[str, Any], config_obj: Dict[str, Any]) -> Tuple[float, str]:
     if result_obj is None:
         return None, None
 
@@ -71,9 +61,7 @@ def pick_metric(
         if isinstance(perception, (int, float)) and isinstance(cognition, (int, float)):
             return perception + cognition, "mme_total_score"
 
-    metric_list = (
-        config_obj.get("metric_list") if isinstance(config_obj, dict) else None
-    )
+    metric_list = config_obj.get("metric_list") if isinstance(config_obj, dict) else None
     if isinstance(metric_list, list):
         for metric in metric_list:
             name = metric.get("metric") if isinstance(metric, dict) else None
@@ -104,9 +92,7 @@ def main() -> int:
     args = parse_args()
     root = args.root
     out_path = args.out or os.path.join(root, "summary.csv")
-    metrics_out = args.metrics_out or os.path.join(
-        os.path.dirname(out_path), "summary_metrics.json"
-    )
+    metrics_out = args.metrics_out or os.path.join(os.path.dirname(out_path), "summary_metrics.json")
 
     result_files = []
     for dirpath, _, filenames in os.walk(root):
@@ -170,9 +156,7 @@ def main() -> int:
 
     print(f"Wrote CSV: {out_path}")
     print(f"Wrote metrics map: {metrics_out}")
-    print(
-        f"Models: {len(models)}, Benchmarks: {len(tasks)}, Files: {len(result_files)}"
-    )
+    print(f"Models: {len(models)}, Benchmarks: {len(tasks)}, Files: {len(result_files)}")
     return 0
 
 
