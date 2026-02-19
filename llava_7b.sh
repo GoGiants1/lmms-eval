@@ -39,6 +39,22 @@ MODEL_PATHS=${MODEL_PATHS:-$(IFS=,; echo "${DEFAULT_MODEL_PATHS[*]}")}
 EVAL_MERGED=${EVAL_MERGED:-0}
 MERGED_ROOT=${MERGED_ROOT:-/mnt/tmp/llava}
 
+# Checkpoint-tree eval mode: evaluate checkpoint-* directories under one or more roots.
+# Example:
+#   EVAL_CHECKPOINT_TREE=1 CHECKPOINT_ROOTS=/path/runA,/path/runB ./llava_7b.sh
+EVAL_CHECKPOINT_TREE=${EVAL_CHECKPOINT_TREE:-1}
+CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-}
+DEFAULT_CHECKPOINT_ROOTS=(
+	"/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/checkpoints/llava-v1.5-7b-lora-v2"
+	# "/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/checkpoints/llava-v1.5-7b-lora-v2-vision-flan"
+)
+CHECKPOINT_ROOTS=${CHECKPOINT_ROOTS:-$(IFS=,; echo "${DEFAULT_CHECKPOINT_ROOTS[*]}")}
+if [[ -n "$CHECKPOINT_ROOT" ]]; then
+	CHECKPOINT_ROOTS="$CHECKPOINT_ROOT"
+fi
+CHECKPOINT_GLOB=${CHECKPOINT_GLOB:-checkpoint-*}
+CHECKPOINT_REQUIRED_FILE=${CHECKPOINT_REQUIRED_FILE:-adapter_model.safetensors}
+
 # If set, only prints which checkpoints would be evaluated (and in what order), then exits.
 DRY_RUN=${DRY_RUN:-0}
 
@@ -268,6 +284,135 @@ run_tasks() {
 		run_eval "$model_path" "$output_path" "$log_suffix" "$task"
 	done
 }
+
+if [[ "$EVAL_CHECKPOINT_TREE" == "1" ]]; then
+	if [[ "$SORT_MODE" != "version" && "$SORT_MODE" != "path" ]]; then
+		echo "Unknown SORT_MODE: $SORT_MODE (expected: version|path)" >&2
+		exit 2
+	fi
+
+	CHECKPOINT_ROOTS="${CHECKPOINT_ROOTS//$'\n'/,}"
+	IFS=',' read -r -a _checkpoint_root_list <<< "$CHECKPOINT_ROOTS"
+	declare -a CHECKPOINT_ROOT_LIST=()
+	for raw_root in "${_checkpoint_root_list[@]}"; do
+		checkpoint_root="$(trim_whitespace "$raw_root")"
+		[[ -z "$checkpoint_root" ]] && continue
+		CHECKPOINT_ROOT_LIST+=("$checkpoint_root")
+	done
+	unset _checkpoint_root_list raw_root checkpoint_root
+
+	if [[ ${#CHECKPOINT_ROOT_LIST[@]} -eq 0 ]]; then
+		echo "No checkpoint roots specified. Set CHECKPOINT_ROOT or CHECKPOINT_ROOTS." >&2
+		exit 2
+	fi
+
+	declare -a TREE_CKPTS=()
+	declare -a TREE_ROOT_NAMES=()
+
+	echo "Checkpoint-tree mode enabled." >&2
+	echo "Tasks: $TASKS" >&2
+	echo "GPUs (visible): ${GPU_IDS[*]}" >&2
+	echo "GPUs (active):  ${ACTIVE_GPU_IDS[*]} (NUM_PROCESSES=$NUM_PROCESSES)" >&2
+	echo "Output root: $OUTPUT_ROOT" >&2
+	echo "CHECKPOINT_GLOB: $CHECKPOINT_GLOB" >&2
+	if [[ -n "$CHECKPOINT_REQUIRED_FILE" ]]; then
+		echo "CHECKPOINT_REQUIRED_FILE: $CHECKPOINT_REQUIRED_FILE" >&2
+	fi
+
+	for root_idx in "${!CHECKPOINT_ROOT_LIST[@]}"; do
+		checkpoint_root="${CHECKPOINT_ROOT_LIST[$root_idx]}"
+		root_name="$(basename "$checkpoint_root")"
+
+		if [[ ! -d "$checkpoint_root" ]]; then
+			echo "Checkpoint root is not a directory: $checkpoint_root" >&2
+			exit 2
+		fi
+
+		if [[ "$SORT_MODE" == "version" ]]; then
+			mapfile -d '' ROOT_CKPTS < <(find "$checkpoint_root" -type d -name "$CHECKPOINT_GLOB" -print0 | sort -z -V)
+		else
+			mapfile -d '' ROOT_CKPTS < <(find "$checkpoint_root" -type d -name "$CHECKPOINT_GLOB" -print0 | sort -z)
+		fi
+
+		if [[ -n "$CHECKPOINT_REQUIRED_FILE" ]]; then
+			declare -a _filtered_ckpts=()
+			for ckpt_dir in "${ROOT_CKPTS[@]}"; do
+				if [[ -f "$ckpt_dir/$CHECKPOINT_REQUIRED_FILE" ]]; then
+					_filtered_ckpts+=("$ckpt_dir")
+				fi
+			done
+			ROOT_CKPTS=("${_filtered_ckpts[@]}")
+			unset _filtered_ckpts
+		fi
+
+		if [[ -n "$PRIORITY_FIRST" ]]; then
+			IFS=',' read -r -a _priority_patterns <<< "$PRIORITY_FIRST"
+			declare -a _prioritized=()
+			declare -a _remaining=()
+
+			for ckpt_dir in "${ROOT_CKPTS[@]}"; do
+				_remaining+=("$ckpt_dir")
+			done
+
+			for pattern in "${_priority_patterns[@]}"; do
+				[[ -z "$pattern" ]] && continue
+				declare -a _next_remaining=()
+				for ckpt_dir in "${_remaining[@]}"; do
+					ckpt_base="$(basename "$ckpt_dir")"
+					if [[ "$ckpt_dir" == $pattern || "$ckpt_base" == $pattern ]]; then
+						_prioritized+=("$ckpt_dir")
+					else
+						_next_remaining+=("$ckpt_dir")
+					fi
+				done
+				_remaining=("${_next_remaining[@]}")
+			done
+
+			ROOT_CKPTS=("${_prioritized[@]}" "${_remaining[@]}")
+			unset _priority_patterns _prioritized _remaining _next_remaining
+		fi
+
+		echo "Root [$((root_idx + 1))/${#CHECKPOINT_ROOT_LIST[@]}]: $checkpoint_root" >&2
+		echo "Order (SORT_MODE=$SORT_MODE):" >&2
+		if [[ ${#ROOT_CKPTS[@]} -eq 0 ]]; then
+			echo "  (no checkpoints matched)" >&2
+			continue
+		fi
+
+		for i in "${!ROOT_CKPTS[@]}"; do
+			ckpt_dir="${ROOT_CKPTS[$i]}"
+			ckpt_name="$(basename "$ckpt_dir")"
+			printf '  %3d/%3d  %s\n' "$((i + 1))" "${#ROOT_CKPTS[@]}" "$ckpt_dir" >&2
+			echo "         -> output: $OUTPUT_ROOT/$root_name/$ckpt_name/" >&2
+			TREE_CKPTS+=("$ckpt_dir")
+			TREE_ROOT_NAMES+=("$root_name")
+		done
+	done
+
+	if [[ ${#TREE_CKPTS[@]} -eq 0 ]]; then
+		echo "No checkpoint directories matched CHECKPOINT_GLOB='$CHECKPOINT_GLOB' under CHECKPOINT_ROOTS." >&2
+		exit 3
+	fi
+
+	echo "Found ${#TREE_CKPTS[@]} total checkpoints across ${#CHECKPOINT_ROOT_LIST[@]} root(s)." >&2
+
+	if [[ "$DRY_RUN" == "1" ]]; then
+		echo "DRY_RUN=1 set; exiting without running eval." >&2
+		exit 0
+	fi
+
+	for i in "${!TREE_CKPTS[@]}"; do
+		ckpt_dir="${TREE_CKPTS[$i]}"
+		root_name="${TREE_ROOT_NAMES[$i]}"
+		ckpt_name="$(basename "$ckpt_dir")"
+		out_dir="$OUTPUT_ROOT/$root_name/$ckpt_name/"
+		suffix="$LOG_SUFFIX-$root_name-$ckpt_name"
+		echo "=== [$((i + 1))/${#TREE_CKPTS[@]}] Evaluating: $ckpt_dir" >&2
+
+		run_tasks "$ckpt_dir" "$out_dir" "$suffix" "$TASKS"
+	done
+	exit 0
+fi
 
 if [[ "$EVAL_MERGED" == "1" ]]; then
 	if [[ -z "$MERGED_ROOT" ]]; then
