@@ -38,7 +38,7 @@ MERGED_ROOT=${MERGED_ROOT:-/mnt/tmp/llava}
 # Checkpoint-tree eval mode: evaluate checkpoint-* directories under one or more roots.
 # Example:
 #   EVAL_CHECKPOINT_TREE=1 CHECKPOINT_ROOTS=/path/runA,/path/runB ./llava_7b.sh
-EVAL_CHECKPOINT_TREE=${1}
+EVAL_CHECKPOINT_TREE=${EVAL_CHECKPOINT_TREE:-1}
 CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-}
 DEFAULT_CHECKPOINT_ROOTS=(
 	"/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/checkpoints/llava-v1.5-7b-lora-v2"
