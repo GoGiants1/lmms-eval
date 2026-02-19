@@ -1,4 +1,4 @@
-uv venv --python 3.10 --seed
+uv venv --python 3.10 --seed --clear
 git clone git@github.com:haotian-liu/LLaVA.git
 
 source .venv/bin/activate
