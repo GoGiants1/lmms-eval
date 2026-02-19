@@ -87,8 +87,8 @@ case "$TASK_SET" in
 		TASKS="$TABLE7_TASKS"
 		;;
 	all)
-		TASKS="$TABLE1_TASKS,$TABLE7_TASKS"
-		;;
+		TASKS="$TABLE1_TASKS,$TABLE7_TASKS,$EXTRA_TASKS"
+		;; 
 	extra)
 		TASKS="$EXTRA_TASKS"
 		;;
