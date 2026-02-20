@@ -42,7 +42,7 @@ MERGED_ROOT=${MERGED_ROOT:-/mnt/tmp/llava}
 EVAL_CHECKPOINT_TREE=${EVAL_CHECKPOINT_TREE:-0}
 CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-}
 DEFAULT_CHECKPOINT_ROOTS=(
-	"/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/checkpoints/llava-v1.5-7b-lora-v2"
+	# "/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/checkpoints/llava-v1.5-7b-lora-v2"
 	"/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/checkpoints/llava-v1.5-7b-lora-v2-vision-flan"
 )
 CHECKPOINT_ROOTS=${CHECKPOINT_ROOTS:-$(IFS=,; echo "${DEFAULT_CHECKPOINT_ROOTS[*]}")}
@@ -51,6 +51,29 @@ if [[ -n "$CHECKPOINT_ROOT" ]]; then
 fi
 CHECKPOINT_GLOB=${CHECKPOINT_GLOB:-checkpoint-*}
 CHECKPOINT_REQUIRED_FILE=${CHECKPOINT_REQUIRED_FILE:-adapter_model.safetensors}
+# Optional checkpoint step filter (python-style): start:end:offset
+# Example: CHECKPOINT_RANGE=100:3000:500 -> 100,600,1100,1600,2100,2600
+CHECKPOINT_RANGE=${CHECKPOINT_RANGE:-}
+# Parsed numeric values from CHECKPOINT_RANGE; set only when CHECKPOINT_RANGE is non-empty.
+CHECKPOINT_RANGE_START=
+CHECKPOINT_RANGE_END=
+CHECKPOINT_RANGE_OFFSET=
+if [[ -n "$CHECKPOINT_RANGE" ]]; then
+	IFS=':' read -r CHECKPOINT_RANGE_START CHECKPOINT_RANGE_END CHECKPOINT_RANGE_OFFSET _checkpoint_range_extra <<< "$CHECKPOINT_RANGE"
+	if [[ -n "${_checkpoint_range_extra:-}" || -z "$CHECKPOINT_RANGE_START" || -z "$CHECKPOINT_RANGE_END" || -z "$CHECKPOINT_RANGE_OFFSET" ]]; then
+		echo "Invalid CHECKPOINT_RANGE='$CHECKPOINT_RANGE'. Expected format: start:end:offset" >&2
+		exit 2
+	fi
+	if ! [[ "$CHECKPOINT_RANGE_START" =~ ^-?[0-9]+$ && "$CHECKPOINT_RANGE_END" =~ ^-?[0-9]+$ && "$CHECKPOINT_RANGE_OFFSET" =~ ^[0-9]+$ ]]; then
+		echo "Invalid CHECKPOINT_RANGE='$CHECKPOINT_RANGE'. start/end must be integers and offset must be a positive integer." >&2
+		exit 2
+	fi
+	if [[ "$CHECKPOINT_RANGE_OFFSET" -le 0 ]]; then
+		echo "Invalid CHECKPOINT_RANGE='$CHECKPOINT_RANGE'. offset must be > 0." >&2
+		exit 2
+	fi
+	unset _checkpoint_range_extra
+fi
 # Include parent model directory for each checkpoint.
 # Default: evaluate the checkpoint parent directory itself.
 # Optional: set PARENT_MODEL_SUBDIR=final to evaluate "<parent>/final" instead.
@@ -204,6 +227,17 @@ model_tag_for_path() {
 	printf '%s' "$tag"
 }
 
+checkpoint_step_from_dir() {
+	local ckpt_dir="$1"
+	local ckpt_name
+	ckpt_name="$(basename "${ckpt_dir%/}")"
+	if [[ "$ckpt_name" =~ ^checkpoint-([0-9]+)$ ]]; then
+		printf '%s' "${BASH_REMATCH[1]}"
+		return 0
+	fi
+	return 1
+}
+
 MODEL_PATHS="${MODEL_PATHS//$'\n'/,}"
 IFS=',' read -r -a _model_path_list <<< "$MODEL_PATHS"
 declare -a MODEL_LIST=()
@@ -325,6 +359,9 @@ if [[ "$EVAL_CHECKPOINT_TREE" == "1" ]]; then
 	if [[ -n "$CHECKPOINT_REQUIRED_FILE" ]]; then
 		echo "CHECKPOINT_REQUIRED_FILE: $CHECKPOINT_REQUIRED_FILE" >&2
 	fi
+	if [[ -n "$CHECKPOINT_RANGE" ]]; then
+		echo "CHECKPOINT_RANGE: $CHECKPOINT_RANGE ([start,end), stride=offset)" >&2
+	fi
 	if [[ "$INCLUDE_PARENT_MODEL" == "1" ]]; then
 		if [[ -n "$PARENT_MODEL_SUBDIR" ]]; then
 			echo "INCLUDE_PARENT_MODEL: 1 (subdir=$PARENT_MODEL_SUBDIR)" >&2
@@ -382,6 +419,25 @@ if [[ "$EVAL_CHECKPOINT_TREE" == "1" ]]; then
 			done
 			ROOT_CKPTS=("${_filtered_ckpts[@]}")
 			unset _filtered_ckpts
+		fi
+
+		if [[ -n "$CHECKPOINT_RANGE" ]]; then
+			declare -a _range_filtered_ckpts=()
+			for ckpt_dir in "${ROOT_CKPTS[@]}"; do
+				if ! ckpt_step="$(checkpoint_step_from_dir "$ckpt_dir")"; then
+					_range_filtered_ckpts+=("$ckpt_dir")
+					continue
+				fi
+				if (( ckpt_step < CHECKPOINT_RANGE_START || ckpt_step >= CHECKPOINT_RANGE_END )); then
+					continue
+				fi
+				if (( (ckpt_step - CHECKPOINT_RANGE_START) % CHECKPOINT_RANGE_OFFSET != 0 )); then
+					continue
+				fi
+				_range_filtered_ckpts+=("$ckpt_dir")
+			done
+			ROOT_CKPTS=("${_range_filtered_ckpts[@]}")
+			unset _range_filtered_ckpts ckpt_step
 		fi
 
 		if [[ -n "$PRIORITY_FIRST" ]]; then
