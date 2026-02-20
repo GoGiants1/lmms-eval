@@ -55,6 +55,11 @@ if [[ -n "$CHECKPOINT_ROOT" ]]; then
 fi
 CHECKPOINT_GLOB=${CHECKPOINT_GLOB:-checkpoint-*}
 CHECKPOINT_REQUIRED_FILE=${CHECKPOINT_REQUIRED_FILE:-adapter_model.safetensors}
+# Include parent model directory for each checkpoint.
+# Default: evaluate the checkpoint parent directory itself.
+# Optional: set PARENT_MODEL_SUBDIR=final to evaluate "<parent>/final" instead.
+INCLUDE_PARENT_MODEL=${INCLUDE_PARENT_MODEL:-${INCLUDE_PARENT_FINAL:-1}}
+PARENT_MODEL_SUBDIR=${PARENT_MODEL_SUBDIR:-${PARENT_FINAL_DIRNAME:-}}
 
 # If set, only prints which checkpoints would be evaluated (and in what order), then exits.
 DRY_RUN=${DRY_RUN:-0}
@@ -324,6 +329,13 @@ if [[ "$EVAL_CHECKPOINT_TREE" == "1" ]]; then
 	if [[ -n "$CHECKPOINT_REQUIRED_FILE" ]]; then
 		echo "CHECKPOINT_REQUIRED_FILE: $CHECKPOINT_REQUIRED_FILE" >&2
 	fi
+	if [[ "$INCLUDE_PARENT_MODEL" == "1" ]]; then
+		if [[ -n "$PARENT_MODEL_SUBDIR" ]]; then
+			echo "INCLUDE_PARENT_MODEL: 1 (subdir=$PARENT_MODEL_SUBDIR)" >&2
+		else
+			echo "INCLUDE_PARENT_MODEL: 1 (target=checkpoint parent directory)" >&2
+		fi
+	fi
 
 	for root_idx in "${!CHECKPOINT_ROOT_LIST[@]}"; do
 		checkpoint_root="${CHECKPOINT_ROOT_LIST[$root_idx]}"
@@ -338,6 +350,31 @@ if [[ "$EVAL_CHECKPOINT_TREE" == "1" ]]; then
 			mapfile -d '' ROOT_CKPTS < <(find "$checkpoint_root" -type d -name "$CHECKPOINT_GLOB" -print0 | sort -z -V)
 		else
 			mapfile -d '' ROOT_CKPTS < <(find "$checkpoint_root" -type d -name "$CHECKPOINT_GLOB" -print0 | sort -z)
+		fi
+
+		declare -a ROOT_PARENT_MODELS=()
+		if [[ "$INCLUDE_PARENT_MODEL" == "1" ]]; then
+			for ckpt_dir in "${ROOT_CKPTS[@]}"; do
+				parent_dir="$(dirname "$ckpt_dir")"
+				parent_model_dir="$parent_dir"
+				if [[ -n "$PARENT_MODEL_SUBDIR" ]]; then
+					parent_model_dir="$parent_dir/$PARENT_MODEL_SUBDIR"
+				fi
+				[[ -d "$parent_model_dir" ]] || continue
+
+				already_seen=0
+				for existing_dir in "${ROOT_PARENT_MODELS[@]}"; do
+					if [[ "$existing_dir" == "$parent_model_dir" ]]; then
+						already_seen=1
+						break
+					fi
+				done
+				if [[ "$already_seen" == "1" ]]; then
+					continue
+				fi
+
+				ROOT_PARENT_MODELS+=("$parent_model_dir")
+			done
 		fi
 
 		if [[ -n "$CHECKPOINT_REQUIRED_FILE" ]]; then
@@ -376,6 +413,21 @@ if [[ "$EVAL_CHECKPOINT_TREE" == "1" ]]; then
 
 			ROOT_CKPTS=("${_prioritized[@]}" "${_remaining[@]}")
 			unset _priority_patterns _prioritized _remaining _next_remaining
+		fi
+
+		if [[ "$INCLUDE_PARENT_MODEL" == "1" && ${#ROOT_PARENT_MODELS[@]} -gt 0 ]]; then
+			for parent_model_dir in "${ROOT_PARENT_MODELS[@]}"; do
+				already_seen=0
+				for existing_dir in "${ROOT_CKPTS[@]}"; do
+					if [[ "$existing_dir" == "$parent_model_dir" ]]; then
+						already_seen=1
+						break
+					fi
+				done
+				if [[ "$already_seen" == "0" ]]; then
+					ROOT_CKPTS+=("$parent_model_dir")
+				fi
+			done
 		fi
 
 		echo "Root [$((root_idx + 1))/${#CHECKPOINT_ROOT_LIST[@]}]: $checkpoint_root" >&2
