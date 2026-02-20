@@ -125,7 +125,7 @@ SINGLE_PROCESS_TASKS="naturalbench"
 # - TextVQA_VAL           -> textvqa_val
 # - DocVQA_VAL            -> docvqa_val
 # - OCRBench              -> ocrbench
-EXTRA_TASKS="coco2014_cap_val,blink,infovqa_val,seedbench,amber_g,vstar_bench,ocrbench"
+EXTRA_TASKS="blink,infovqa_val,seedbench,amber_g,vstar_bench,ocrbench"
 
 
 case "$TASK_SET" in
