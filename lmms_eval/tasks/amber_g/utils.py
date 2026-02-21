@@ -4,6 +4,7 @@ import urllib.request
 
 import nltk
 import spacy
+from spacy.cli import download as spacy_download
 from nltk.stem import WordNetLemmatizer
 
 from lmms_eval.utils import eval_logger
@@ -26,6 +27,7 @@ _METRICS_INIT = None
 _NLP = None  # Lazy load spaCy
 _NLTK_RESOURCE_CHECKED = set()
 _NLTK_FALLBACK_WARNED = set()
+_SPACY_DOWNLOAD_ATTEMPTED = set()
 
 
 def _ensure_nltk_resource(resource_path, download_name):
@@ -110,7 +112,31 @@ def get_nlp():
         except OSError:
             continue
 
-    raise OSError("No spaCy model found. Please install one:\n" "  pip install spacy\n" "  python -m spacy download en_core_web_sm\n" "or for better accuracy:\n" "  python -m spacy download en_core_web_md")
+    # Auto-download if models are missing; try better-accuracy model first.
+    models_to_download = ["en_core_web_md", "en_core_web_sm", "en_core_web_lg"]
+    for model_name in models_to_download:
+        if model_name in _SPACY_DOWNLOAD_ATTEMPTED:
+            continue
+        _SPACY_DOWNLOAD_ATTEMPTED.add(model_name)
+        try:
+            eval_logger.info("spaCy model '{}' not found. Attempting automatic download for amber_g.", model_name)
+            spacy_download(model_name)
+        except Exception as exc:
+            eval_logger.warning("Failed to auto-download spaCy model '{}': {}", model_name, exc)
+            continue
+
+        try:
+            _NLP = spacy.load(model_name)
+            return _NLP
+        except OSError:
+            continue
+
+    raise OSError(
+        "No spaCy model found and automatic download failed. "
+        "Try manually: `.venv/bin/python -m spacy download en_core_web_sm` "
+        "or `.venv/bin/python -m spacy download en_core_web_md` "
+        "or `.venv/bin/python -m spacy download en_core_web_lg`."
+    )
 
 
 def load_metadata():
