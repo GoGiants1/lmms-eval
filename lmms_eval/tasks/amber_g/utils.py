@@ -4,8 +4,8 @@ import urllib.request
 
 import nltk
 import spacy
-from spacy.cli import download as spacy_download
 from nltk.stem import WordNetLemmatizer
+from spacy.cli import download as spacy_download
 
 from lmms_eval.utils import eval_logger
 
