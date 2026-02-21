@@ -86,6 +86,13 @@ PARENT_MODEL_SUBDIR=${PARENT_MODEL_SUBDIR:-${PARENT_FINAL_DIRNAME:-}}
 
 # If set, only prints which checkpoints would be evaluated (and in what order), then exits.
 DRY_RUN=${DRY_RUN:-0}
+# If set, skips a task when matching sample/result artifacts already exist in output_path.
+# Set SKIP_EXISTING=0 to force rerunning all tasks.
+SKIP_EXISTING=${SKIP_EXISTING:-1}
+if [[ "$SKIP_EXISTING" != "0" && "$SKIP_EXISTING" != "1" ]]; then
+	echo "SKIP_EXISTING must be 0 or 1 (got: '$SKIP_EXISTING')" >&2
+	exit 2
+fi
 
 # Ordering for bulk eval list:
 # - SORT_MODE=version  (default; natural sort, good for r20,r40,r100)
@@ -314,6 +321,30 @@ run_eval() {
 		--verbosity=DEBUG
 }
 
+EXISTING_TASK_ARTIFACT=""
+
+task_has_completed_output() {
+	local output_path="$1"
+	local task="$2"
+	local -a sample_files=()
+	local sample_file
+	local result_file
+
+	EXISTING_TASK_ARTIFACT=""
+	[[ -d "$output_path" ]] || return 1
+
+	mapfile -d '' sample_files < <(find "$output_path" -type f -name "*_samples_${task}*.jsonl" -print0 2>/dev/null)
+	for sample_file in "${sample_files[@]}"; do
+		result_file="${sample_file%%_samples_*}_results.json"
+		if [[ -f "$result_file" ]]; then
+			EXISTING_TASK_ARTIFACT="$result_file"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
 run_tasks() {
 	local model_path="$1"
 	local output_path="$2"
@@ -325,6 +356,10 @@ run_tasks() {
 	IFS=',' read -r -a TASK_LIST <<< "$tasks_csv"
 	for j in "${!TASK_LIST[@]}"; do
 		task="${TASK_LIST[$j]}"
+		if [[ "$SKIP_EXISTING" == "1" ]] && task_has_completed_output "$output_path" "$task"; then
+			echo "  --- Task [$((j + 1))/${#TASK_LIST[@]}]: $task (DP=$NUM_PROCESSES, GPUs=$ACTIVE_GPU_LIST) [SKIP_EXISTING=1; found $EXISTING_TASK_ARTIFACT]" >&2
+			continue
+		fi
 		echo "  --- Task [$((j + 1))/${#TASK_LIST[@]}]: $task (DP=$NUM_PROCESSES, GPUs=$ACTIVE_GPU_LIST)" >&2
 		run_eval "$model_path" "$output_path" "$log_suffix" "$task"
 	done
