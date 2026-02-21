@@ -1,16 +1,21 @@
 import json
 import os
+import urllib.request
 
 import nltk
 import spacy
 from nltk.stem import WordNetLemmatizer
 
+from lmms_eval.utils import eval_logger
+
 # Configuration
 AMBER_BASE_DIR = os.environ.get("AMBER_BASE_DIR", "./data/amber")
+AMBER_DATA_BASE_URL = os.environ.get("AMBER_DATA_BASE_URL", "https://raw.githubusercontent.com/junyangwang0410/AMBER/master/data")
 SIMILARITY_THRESHOLD = 0.8
 EVALUATION_TYPE = "g"  # Default to g
 METADATA_DIR = os.path.join(AMBER_BASE_DIR, "metadata")
 QUESTIONS_DIR = os.path.join(AMBER_BASE_DIR, "questions")
+METADATA_FILES = ("relation.json", "safe_words.txt", "annotations.json", "metrics.txt")
 
 # Global variables for loaded metadata
 _ASSOCIATION = None
@@ -19,6 +24,75 @@ _SAFE_WORDS = None
 _ANNOTATIONS = None
 _METRICS_INIT = None
 _NLP = None  # Lazy load spaCy
+_NLTK_RESOURCE_CHECKED = set()
+_NLTK_FALLBACK_WARNED = set()
+
+
+def _ensure_nltk_resource(resource_path, download_name):
+    """Ensure an NLTK resource is available, attempting one download if missing."""
+    if resource_path in _NLTK_RESOURCE_CHECKED:
+        return
+
+    _NLTK_RESOURCE_CHECKED.add(resource_path)
+    try:
+        nltk.data.find(resource_path)
+    except LookupError:
+        try:
+            nltk.download(download_name, quiet=True)
+        except Exception:
+            eval_logger.debug("Failed to download NLTK resource '{}'", download_name)
+
+
+def _warn_once(key, message):
+    """Emit a warning once per key to avoid per-sample log spam."""
+    if key in _NLTK_FALLBACK_WARNED:
+        return
+    _NLTK_FALLBACK_WARNED.add(key)
+    eval_logger.warning(message)
+
+
+def _tokenize_with_fallback(text):
+    """Tokenize text with graceful fallback when punkt resources are unavailable."""
+    try:
+        return nltk.word_tokenize(text)
+    except LookupError:
+        # NLTK>=3.9 may require punkt_tab, while older versions use punkt.
+        _ensure_nltk_resource("tokenizers/punkt_tab", "punkt_tab")
+        _ensure_nltk_resource("tokenizers/punkt", "punkt")
+        try:
+            return nltk.word_tokenize(text)
+        except LookupError:
+            _warn_once("punkt", "NLTK punkt resources are unavailable. Falling back to wordpunct_tokenize for amber_g.")
+            return nltk.tokenize.wordpunct_tokenize(text)
+
+
+def _pos_tag_with_fallback(tokens):
+    """POS tag tokens with graceful fallback when tagger resources are unavailable."""
+    try:
+        return nltk.pos_tag(tokens)
+    except LookupError:
+        # Newer NLTK versions may use averaged_perceptron_tagger_eng.
+        _ensure_nltk_resource("taggers/averaged_perceptron_tagger_eng", "averaged_perceptron_tagger_eng")
+        _ensure_nltk_resource("taggers/averaged_perceptron_tagger", "averaged_perceptron_tagger")
+        try:
+            return nltk.pos_tag(tokens)
+        except LookupError:
+            _warn_once("pos_tagger", "NLTK POS tagger resources are unavailable. Falling back to noun-only heuristic for amber_g.")
+            return [(token, "NN") for token in tokens]
+
+
+def _lemmatize_with_fallback(lemmatizer, word):
+    """Lemmatize a token, falling back to the original token if wordnet is missing."""
+    try:
+        return lemmatizer.lemmatize(word)
+    except LookupError:
+        _ensure_nltk_resource("corpora/wordnet", "wordnet")
+        _ensure_nltk_resource("corpora/omw-1.4", "omw-1.4")
+        try:
+            return lemmatizer.lemmatize(word)
+        except LookupError:
+            _warn_once("wordnet", "NLTK wordnet resources are unavailable. Falling back to raw tokens for amber_g lemmatization.")
+            return word
 
 
 def get_nlp():
@@ -45,6 +119,7 @@ def load_metadata():
 
     if _ASSOCIATION is not None:
         return
+    ensure_metadata_files()
 
     association_file = os.path.join(METADATA_DIR, "relation.json")
     _ASSOCIATION = load_json(association_file)
@@ -64,6 +139,35 @@ def load_metadata():
     # Load metrics initialization
     metrics_file = os.path.join(METADATA_DIR, "metrics.txt")
     _METRICS_INIT = load_metrics(metrics_file)
+
+
+def ensure_metadata_files():
+    """Ensure required metadata files exist locally, downloading from AMBER repo if needed."""
+    os.makedirs(METADATA_DIR, exist_ok=True)
+
+    for filename in METADATA_FILES:
+        local_path = os.path.join(METADATA_DIR, filename)
+        if os.path.exists(local_path):
+            continue
+
+        remote_url = f"{AMBER_DATA_BASE_URL}/{filename}"
+        _download_file(remote_url, local_path)
+
+
+def _download_file(url, destination):
+    """Download a file atomically to avoid partially-written metadata files."""
+    tmp_destination = f"{destination}.tmp.{os.getpid()}"
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            content = response.read()
+        with open(tmp_destination, "wb") as file:
+            file.write(content)
+        os.replace(tmp_destination, destination)
+        eval_logger.info("Downloaded AMBER metadata file '{}' from '{}'", destination, url)
+    except Exception as exc:
+        if os.path.exists(tmp_destination):
+            os.remove(tmp_destination)
+        raise FileNotFoundError(f"Missing AMBER metadata file: {destination}. Download from {url} failed: {exc}") from exc
 
 
 #########################################
@@ -110,9 +214,9 @@ def check_synonyms_word(word1, word2, similarity_threshold):
 def extract_nouns(text):
     """Extract lemmatized nouns from given text using NLTK."""
     lemmatizer = WordNetLemmatizer()
-    tokens = nltk.word_tokenize(text)
-    tagged = nltk.pos_tag(tokens)
-    nouns = [lemmatizer.lemmatize(word) for word, pos in tagged if pos.startswith("NN")]
+    tokens = _tokenize_with_fallback(text)
+    tagged = _pos_tag_with_fallback(tokens)
+    nouns = [_lemmatize_with_fallback(lemmatizer, word) for word, pos in tagged if pos.startswith("NN")]
     return nouns
 
 
