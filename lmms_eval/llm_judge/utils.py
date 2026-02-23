@@ -20,9 +20,7 @@ class JudgePromptBuilder:
         """
         filled_prompt = custom_prompt
         for key, value in values.items():
-            filled_prompt = filled_prompt.replace(
-                f"{{{key}}}", "" if value is None else str(value)
-            )
+            filled_prompt = filled_prompt.replace(f"{{{key}}}", "" if value is None else str(value))
         return filled_prompt
 
     @staticmethod
@@ -45,11 +43,7 @@ class JudgePromptBuilder:
                 **kwargs,
             )
 
-        positive, negative = (
-            ("1", "0")
-            if output_format == "0/1" or output_format == "1/0"
-            else ("Yes", "No")
-        )
+        positive, negative = ("1", "0") if output_format == "0/1" or output_format == "1/0" else ("Yes", "No")
 
         return BINARY_JUDGE_PROMPT.format(
             question=question,
@@ -84,9 +78,7 @@ class JudgePromptBuilder:
         context_section = f"[Context]\n{context}\n\n" if context else ""
 
         if not evaluation_instruction:
-            evaluation_instruction = (
-                f"Please provide scores from {score_range[0]} to {score_range[1]}."
-            )
+            evaluation_instruction = f"Please provide scores from {score_range[0]} to {score_range[1]}."
 
         return COMPARATIVE_JUDGE_PROMPT.format(
             question=question,
@@ -122,17 +114,13 @@ class ResponseParser:
     """Helper class to parse different types of judge responses"""
 
     @staticmethod
-    def parse_binary_response(
-        response: str, output_format: str = "0/1"
-    ) -> Union[int, bool]:
+    def parse_binary_response(response: str, output_format: str = "0/1") -> Union[int, bool]:
         """Parse binary response (0/1 or yes/no)"""
         response = response.strip().lower()
 
         if output_format == "0/1" or output_format == "1/0":
             # Check for various formats of 1
-            if any(
-                pattern in response for pattern in ["1", "[1]", "score: 1", "answer: 1"]
-            ):
+            if any(pattern in response for pattern in ["1", "[1]", "score: 1", "answer: 1"]):
                 return 1
             else:
                 return 0
@@ -141,9 +129,7 @@ class ResponseParser:
             return response == "yes" or response.startswith("yes")
 
     @staticmethod
-    def parse_score_response(
-        response: str, score_range: Optional[Tuple[float, float]] = None
-    ) -> float:
+    def parse_score_response(response: str, score_range: Optional[Tuple[float, float]] = None) -> float:
         """Parse a single score from response"""
         try:
             # Try to extract first number from response

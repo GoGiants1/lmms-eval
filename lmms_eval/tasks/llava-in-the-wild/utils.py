@@ -17,9 +17,7 @@ LLAVA_W_METRICS = [
     "gpt_eval_llava_complex",
 ]
 
-rule_dict = json.load(
-    open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rule.json"), "r")
-)
+rule_dict = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rule.json"), "r"))
 
 with open(Path(__file__).parent / "llava-in-the-wild.yaml", "r") as f:
     raw_data = f.readlines()
@@ -70,13 +68,7 @@ def llava_process_results(doc, result):
         rule = rule_dict.get(category, {})
         prompt = rule.get("prompt", "")
         role = rule.get("role", "user")
-        content = (
-            f"[Context]\n{context}\n\n"
-            f"[Question]\n{question}\n\n"
-            f"[{role} 1]\n{ans1}\n\n[End of {role} 1]\n\n"
-            f"[{role} 2]\n{ans2}\n\n[End of {role} 2]\n\n"
-            f"[System]\n{prompt}\n\n"
-        )
+        content = f"[Context]\n{context}\n\n" f"[Question]\n{question}\n\n" f"[{role} 1]\n{ans1}\n\n[End of {role} 1]\n\n" f"[{role} 2]\n{ans2}\n\n[End of {role} 2]\n\n" f"[System]\n{prompt}\n\n"
 
         result = server.evaluate_comparative(
             question=question,
@@ -91,9 +83,7 @@ def llava_process_results(doc, result):
         model_name = result["model"]
         scores = list(result["scores"])
     except Exception as e:
-        eval_logger.error(
-            f"Error for Question ID: {doc.get('question_id', 'Unknown')}: {e}"
-        )
+        eval_logger.error(f"Error for Question ID: {doc.get('question_id', 'Unknown')}: {e}")
         review = "Failed to Get a Proper Review."
         model_name = "Failed Request"
         scores = [-1, -1]
@@ -160,7 +150,5 @@ def llava_aggregation(results, category):
         # eval_logger.info("=========================")
         return round(stats[1] / stats[0] * 100, 1)
     except Exception as e:
-        eval_logger.info(
-            f"Error in llava_aggregation: {e}, and in category: {category}"
-        )
+        eval_logger.info(f"Error in llava_aggregation: {e}, and in category: {category}")
         return None
