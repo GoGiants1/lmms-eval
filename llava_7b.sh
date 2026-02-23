@@ -114,7 +114,7 @@ PRIORITY_FIRST=${PRIORITY_FIRST:-llava_v1.5_7b_sel_static_r20_s42_merged}
 TASK_SET=${TASK_SET:-all}
 TASKS=${TASKS:-}
 
-TABLE1_TASKS="mme,scienceqa_img,pope,textvqa,mmbench_en,gqa,vizwiz_vqa,mmbench_cn,llava_in_the_wild"
+TABLE1_TASKS="mme,scienceqa_img,pope,textvqa_val,mmbench_en,gqa,vizwiz_vqa_val,mmbench_cn,llava_in_the_wild"
 TABLE7_TASKS="ai2d,chartqa,docvqa,infovqa,naturalbench,realworldqa,cmmmu,mmvet,mmmu_val,mathvision_testmini,mmstar,mathvista_testmini"
 SINGLE_PROCESS_TASKS="naturalbench"
 # Extra set (mapped from internal benchmark nicknames):
@@ -132,7 +132,7 @@ SINGLE_PROCESS_TASKS="naturalbench"
 # - TextVQA_VAL           -> textvqa_val
 # - DocVQA_VAL            -> docvqa_val
 # - OCRBench              -> ocrbench
-EXTRA_TASKS="blink,infovqa_val,seedbench,amber_g,vstar_bench,ocrbench"
+EXTRA_TASKS="blink,seedbench,amber_g,vstar_bench,ocrbench"
 
 
 case "$TASK_SET" in
