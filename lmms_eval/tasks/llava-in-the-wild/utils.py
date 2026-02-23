@@ -11,9 +11,15 @@ from lmms_eval.llm_judge import ServerConfig, get_server
 
 NUM_SECONDS_TO_SLEEP = 5
 
-LLAVA_W_METRICS = ["gpt_eval_llava_conv", "gpt_eval_llava_detail", "gpt_eval_llava_complex"]
+LLAVA_W_METRICS = [
+    "gpt_eval_llava_conv",
+    "gpt_eval_llava_detail",
+    "gpt_eval_llava_complex",
+]
 
-rule_dict = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rule.json"), "r"))
+rule_dict = json.load(
+    open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rule.json"), "r")
+)
 
 with open(Path(__file__).parent / "llava-in-the-wild.yaml", "r") as f:
     raw_data = f.readlines()
@@ -64,21 +70,46 @@ def llava_process_results(doc, result):
         rule = rule_dict.get(category, {})
         prompt = rule.get("prompt", "")
         role = rule.get("role", "user")
-        content = f"[Context]\n{context}\n\n" f"[Question]\n{question}\n\n" f"[{role} 1]\n{ans1}\n\n[End of {role} 1]\n\n" f"[{role} 2]\n{ans2}\n\n[End of {role} 2]\n\n" f"[System]\n{prompt}\n\n"
+        content = (
+            f"[Context]\n{context}\n\n"
+            f"[Question]\n{question}\n\n"
+            f"[{role} 1]\n{ans1}\n\n[End of {role} 1]\n\n"
+            f"[{role} 2]\n{ans2}\n\n[End of {role} 2]\n\n"
+            f"[System]\n{prompt}\n\n"
+        )
 
-        result = server.evaluate_comparative(question=question, response1=ans1, response2=ans2, context=context, custom_prompt=content, score_range=(1, 10))
+        result = server.evaluate_comparative(
+            question=question,
+            response1=ans1,
+            response2=ans2,
+            context=context,
+            custom_prompt=content,
+            score_range=(1, 10),
+        )
 
         review = result["raw_response"]
         model_name = result["model"]
         scores = list(result["scores"])
     except Exception as e:
-        eval_logger.error(f"Error for Question ID: {doc.get('question_id', 'Unknown')}: {e}")
+        eval_logger.error(
+            f"Error for Question ID: {doc.get('question_id', 'Unknown')}: {e}"
+        )
         review = "Failed to Get a Proper Review."
         model_name = "Failed Request"
         scores = [-1, -1]
 
     metric = f"gpt_eval_llava_{doc.get('category', 'all')}"
-    category_review_dict = {"question": question, "ans1": ans1, "ans2": ans2, "context": context, "category": category, "review": review, "scores": scores, "eval_model": model_name, "content": content}
+    category_review_dict = {
+        "question": question,
+        "ans1": ans1,
+        "ans2": ans2,
+        "context": context,
+        "category": category,
+        "review": review,
+        "scores": scores,
+        "eval_model": model_name,
+        "content": content,
+    }
 
     non_category_review_dict = deepcopy(category_review_dict)
     non_category_review_dict["scores"] = [-999, -999]
@@ -129,5 +160,7 @@ def llava_aggregation(results, category):
         # eval_logger.info("=========================")
         return round(stats[1] / stats[0] * 100, 1)
     except Exception as e:
-        eval_logger.info(f"Error in llava_aggregation: {e}, and in category: {category}")
+        eval_logger.info(
+            f"Error in llava_aggregation: {e}, and in category: {category}"
+        )
         return None
