@@ -102,6 +102,34 @@ bash llava15_official_eval.sh all \
 3. 둘 다 없으면 `--model-scripts`로 모델 목록 파싱  
    기본값: `llava_7b.sh,llava_7b_2.sh,llava_7b_3.sh`
 
+### 4.1 기본 모델 목록 (`llava_7b*.sh` 기준)
+
+기본 실행(`--model-path`, `--model-paths` 미지정) 시, 아래 모델들을 대상으로 평가합니다.
+
+- `llava_7b.sh` (5개)
+  - `liuhaotian/llava-v1.5-7b`
+  - `/mnt/tmp/llava/llava_v1.5_7b_sel_static_r20_s42_merged`
+  - `/mnt/tmp/llava/llava_v1.5_7b_sel_static_r40_s42_merged`
+  - `/mnt/tmp/llava/llava_v1.5_7b_r20_merged`
+  - `/mnt/tmp/llava/llava_v1.5_7b_r40_merged`
+- `llava_7b_2.sh` (2개)
+  - `/mnt/tmp/llava/llava_v1.5_7b_sel_static_range100_r20_s42_merged`
+  - `/mnt/tmp/llava/llava_v1.5_7b_sel_static_range100_r40_s42_merged`
+- `llava_7b_3.sh` (2개)
+  - `/mnt/tmp/llava/llava_v1.5_7b_sel_static_range200_r20_s42_merged`
+  - `/mnt/tmp/llava/llava_v1.5_7b_sel_static_range200_r40_s42_merged`
+- joon0822/llava_v1.5_7b_vf191_r100_merged
+- joon0822/llava_v1.5_7b_vf191_r40_merged
+- joon0822/llava_v1.5_7b_vf191_r20_merged
+- joon0822/llava_v1.5_7b_r60_merged
+- joon0822/llava_v1.5_7b_r80_merged
+- joon0822/llava_v1.5_7b_r100_merged
+합계: 기본 9개 모델
+
+참고:
+- 위 목록은 `DRY_RUN=1 EVAL_CHECKPOINT_TREE=0 EVAL_MERGED=0` 기준 `Order` 출력에서 확인했습니다.
+- 로컬 경로는 각 스크립트의 `MODEL_BASE_PATHS` 기본값(`/mnt/tmp/llava`)에 따라 달라질 수 있습니다.
+
 예시:
 
 ```bash
@@ -151,7 +179,7 @@ bash llava15_official_eval.sh run \
 - `--benchmarks vqav2,textvqa,mmbench,mmbench_cn,llava_wild,mme`
 - `--model-base` (LoRA 등에서 base 필요 시)
 - `--conv-mode` (기본: `vicuna_v1`)
-- `--gpus` (VQAv2 chunk 분할 GPU 목록)
+- `--gpus` (벤치마크 추론 청크 분할 GPU 목록)
 - `--llava-review` (`llava_wild` GPT 리뷰까지 수행, `OPENAI_API_KEY` 필요)
 - `--download-workers` (벤치마크 단위 병렬 다운로드 worker 수, 기본 `3`)
 - `--hf-download-workers` (`llava_wild`의 HuggingFace snapshot worker 수, 기본 `16`)
@@ -184,3 +212,17 @@ bash llava15_official_eval.sh run \
   - `download`를 먼저 수행하세요.
 - `--llava-review requires OPENAI_API_KEY`
   - `llava_wild` 리뷰 모드 사용 시 환경변수 설정이 필요합니다.
+
+```
+bash llava15_official_eval.sh run \
+    --benchmarks vqav2,textvqa \
+    --model-paths joon0822/llava_v1.5_7b_vf191_r100_merged,joon0822/llava_v1.5_7b_vf191_r40_merged,joon0822/llava_v1.5_7b_vf191_r20_merged \
+    --gpus 0,1,2,3,4,5,6,7
+```
+
+```
+bash llava15_official_eval.sh run \
+    --benchmarks vqav2,textvqa \
+    --model-paths joon0822/llava_v1.5_7b_r60_merged,joon0822/llava_v1.5_7b_r80_merged,joon0822/llava_v1.5_7b_r100_merged \
+    --gpus 0,1,2,3,4,5,6,7
+```

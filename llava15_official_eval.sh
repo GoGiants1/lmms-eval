@@ -42,6 +42,7 @@ declare -a MODEL_PATH_ARGS=()
 declare -a SELECTED_BENCHMARKS=()
 declare -a MODEL_LIST=()
 declare -a MODEL_ID_LIST=()
+declare -a PARSED_GPUS=()
 declare -A MODEL_PATH_SEEN=()
 
 log() {
@@ -97,7 +98,8 @@ Options:
   --model-base PATH   Optional model base (for LoRA-style loading).
   --model-id NAME     Output name for answer/result folders (single model only).
   --conv-mode NAME    Conversation template name. Default: vicuna_v1
-  --gpus LIST         GPU ids for VQAv2 multi-chunk inference. Default: CUDA_VISIBLE_DEVICES or 0
+  --gpus LIST         GPU ids for multi-chunk inference across benchmarks.
+                      Default: CUDA_VISIBLE_DEVICES or 0
   --llava-review      Also run GPT review step for llava_wild (needs OPENAI_API_KEY).
                       If omitted, llava_wild runs inference-only.
   --download-workers N
@@ -424,6 +426,51 @@ require_positive_int() {
   fi
 }
 
+parse_gpu_list_or_die() {
+  local gpu_list="${GPUS// /}"
+  [[ -n "${gpu_list}" ]] || die "No GPU specified. Set --gpus or CUDA_VISIBLE_DEVICES."
+
+  PARSED_GPUS=()
+  local raw_gpu=""
+  local -a raw_gpu_arr=()
+  IFS=',' read -r -a raw_gpu_arr <<< "${gpu_list}"
+  for raw_gpu in "${raw_gpu_arr[@]}"; do
+    [[ -n "${raw_gpu}" ]] && PARSED_GPUS+=("${raw_gpu}")
+  done
+
+  (( ${#PARSED_GPUS[@]} > 0 )) || die "Failed to parse --gpus: ${GPUS}"
+}
+
+wait_for_jobs_or_die() {
+  local job_name="$1"
+  shift
+  local -a pids=("$@")
+  local failed=0
+  local pid=0
+  for pid in "${pids[@]}"; do
+    if ! wait "${pid}"; then
+      failed=1
+    fi
+  done
+  (( failed == 0 )) || die "${job_name} failed on one or more chunks."
+}
+
+merge_chunk_outputs() {
+  local merged_file="$1"
+  local chunk_dir="$2"
+  local chunks="$3"
+
+  mkdir -p "$(dirname "${merged_file}")"
+  : > "${merged_file}"
+
+  local idx=0
+  for ((idx = 0; idx < chunks; idx++)); do
+    local chunk_file="${chunk_dir}/${chunks}_${idx}.jsonl"
+    require_file "${chunk_file}"
+    cat "${chunk_file}" >> "${merged_file}"
+  done
+}
+
 download_eval_base() {
   local eval_zip="${CACHE_DIR}/eval.zip"
   local sentinel="${EVAL_DIR}/vqav2/llava_vqav2_mscoco_test-dev2015.jsonl"
@@ -538,25 +585,16 @@ run_vqav2() {
   require_file "${EVAL_DIR}/vqav2/llava_vqav2_mscoco_test2015.jsonl"
   require_dir "${EVAL_DIR}/vqav2/test2015"
 
+  parse_gpu_list_or_die
   local gpu_list="${GPUS// /}"
-  [[ -n "${gpu_list}" ]] || die "No GPU specified for VQAv2. Set --gpus or CUDA_VISIBLE_DEVICES."
-
-  local raw_gpu=""
-  local -a raw_gpu_arr=()
-  local -a gpu_arr=()
-  IFS=',' read -r -a raw_gpu_arr <<< "${gpu_list}"
-  for raw_gpu in "${raw_gpu_arr[@]}"; do
-    [[ -n "${raw_gpu}" ]] && gpu_arr+=("${raw_gpu}")
-  done
-
-  local chunks="${#gpu_arr[@]}"
-  (( chunks > 0 )) || die "Failed to parse --gpus: ${GPUS}"
-
+  local chunks="${#PARSED_GPUS[@]}"
+  local chunk_dir="${EVAL_DIR}/vqav2/answers/${split}/${CURRENT_MODEL_ID}"
   log "Running VQAv2 with ${chunks} chunk(s) on GPU list: ${gpu_list}"
+
   local -a pids=()
   local idx=0
-  for idx in "${!gpu_arr[@]}"; do
-    CUDA_VISIBLE_DEVICES="${gpu_arr[${idx}]}" run_from_llava -m llava.eval.model_vqa_loader \
+  for idx in "${!PARSED_GPUS[@]}"; do
+    CUDA_VISIBLE_DEVICES="${PARSED_GPUS[${idx}]}" run_from_llava -m llava.eval.model_vqa_loader \
       "${MODEL_PATH_ARGS[@]}" \
       --question-file "./playground/data/eval/vqav2/${split}.jsonl" \
       --image-folder "./playground/data/eval/vqav2/test2015" \
@@ -568,22 +606,10 @@ run_vqav2() {
     pids+=("$!")
   done
 
-  local failed=0
-  local pid=0
-  for pid in "${pids[@]}"; do
-    if ! wait "${pid}"; then
-      failed=1
-    fi
-  done
-  (( failed == 0 )) || die "VQAv2 inference failed on one or more chunks."
+  wait_for_jobs_or_die "VQAv2 inference" "${pids[@]}"
 
   local merged_file="${EVAL_DIR}/vqav2/answers/${split}/${CURRENT_MODEL_ID}/merge.jsonl"
-  : > "${merged_file}"
-  for idx in "${!gpu_arr[@]}"; do
-    local chunk_file="${EVAL_DIR}/vqav2/answers/${split}/${CURRENT_MODEL_ID}/${chunks}_${idx}.jsonl"
-    require_file "${chunk_file}"
-    cat "${chunk_file}" >> "${merged_file}"
-  done
+  merge_chunk_outputs "${merged_file}" "${chunk_dir}" "${chunks}"
 
   run_from_llava scripts/convert_vqav2_for_submission.py --split "${split}" --ckpt "${CURRENT_MODEL_ID}"
   log "VQAv2 done. Submission json: ${EVAL_DIR}/vqav2/answers_upload/${split}/${CURRENT_MODEL_ID}.json"
@@ -594,13 +620,30 @@ run_textvqa() {
   require_file "${EVAL_DIR}/textvqa/TextVQA_0.5.1_val.json"
   require_dir "${EVAL_DIR}/textvqa/train_images"
 
-  run_from_llava -m llava.eval.model_vqa_loader \
-    "${MODEL_PATH_ARGS[@]}" \
-    --question-file "./playground/data/eval/textvqa/llava_textvqa_val_v051_ocr.jsonl" \
-    --image-folder "./playground/data/eval/textvqa/train_images" \
-    --answers-file "./playground/data/eval/textvqa/answers/${CURRENT_MODEL_ID}.jsonl" \
-    --temperature 0 \
-    --conv-mode "${CONV_MODE}"
+  parse_gpu_list_or_die
+  local gpu_list="${GPUS// /}"
+  local chunks="${#PARSED_GPUS[@]}"
+  local chunk_dir="${EVAL_DIR}/textvqa/answers_chunks/${CURRENT_MODEL_ID}"
+  local merged_file="${EVAL_DIR}/textvqa/answers/${CURRENT_MODEL_ID}.jsonl"
+  log "Running TextVQA with ${chunks} chunk(s) on GPU list: ${gpu_list}"
+
+  local -a pids=()
+  local idx=0
+  for idx in "${!PARSED_GPUS[@]}"; do
+    CUDA_VISIBLE_DEVICES="${PARSED_GPUS[${idx}]}" run_from_llava -m llava.eval.model_vqa_loader \
+      "${MODEL_PATH_ARGS[@]}" \
+      --question-file "./playground/data/eval/textvqa/llava_textvqa_val_v051_ocr.jsonl" \
+      --image-folder "./playground/data/eval/textvqa/train_images" \
+      --answers-file "./playground/data/eval/textvqa/answers_chunks/${CURRENT_MODEL_ID}/${chunks}_${idx}.jsonl" \
+      --num-chunks "${chunks}" \
+      --chunk-idx "${idx}" \
+      --temperature 0 \
+      --conv-mode "${CONV_MODE}" &
+    pids+=("$!")
+  done
+
+  wait_for_jobs_or_die "TextVQA inference" "${pids[@]}"
+  merge_chunk_outputs "${merged_file}" "${chunk_dir}" "${chunks}"
 
   run_from_llava -m llava.eval.eval_textvqa \
     --annotation-file "./playground/data/eval/textvqa/TextVQA_0.5.1_val.json" \
@@ -613,13 +656,30 @@ run_mmbench() {
   local split="mmbench_dev_20230712"
   require_file "${EVAL_DIR}/mmbench/${split}.tsv"
 
-  run_from_llava -m llava.eval.model_vqa_mmbench \
-    "${MODEL_PATH_ARGS[@]}" \
-    --question-file "./playground/data/eval/mmbench/${split}.tsv" \
-    --answers-file "./playground/data/eval/mmbench/answers/${split}/${CURRENT_MODEL_ID}.jsonl" \
-    --single-pred-prompt \
-    --temperature 0 \
-    --conv-mode "${CONV_MODE}"
+  parse_gpu_list_or_die
+  local gpu_list="${GPUS// /}"
+  local chunks="${#PARSED_GPUS[@]}"
+  local chunk_dir="${EVAL_DIR}/mmbench/answers/${split}/${CURRENT_MODEL_ID}_chunks"
+  local merged_file="${EVAL_DIR}/mmbench/answers/${split}/${CURRENT_MODEL_ID}.jsonl"
+  log "Running MMBench(en) with ${chunks} chunk(s) on GPU list: ${gpu_list}"
+
+  local -a pids=()
+  local idx=0
+  for idx in "${!PARSED_GPUS[@]}"; do
+    CUDA_VISIBLE_DEVICES="${PARSED_GPUS[${idx}]}" run_from_llava -m llava.eval.model_vqa_mmbench \
+      "${MODEL_PATH_ARGS[@]}" \
+      --question-file "./playground/data/eval/mmbench/${split}.tsv" \
+      --answers-file "./playground/data/eval/mmbench/answers/${split}/${CURRENT_MODEL_ID}_chunks/${chunks}_${idx}.jsonl" \
+      --num-chunks "${chunks}" \
+      --chunk-idx "${idx}" \
+      --single-pred-prompt \
+      --temperature 0 \
+      --conv-mode "${CONV_MODE}" &
+    pids+=("$!")
+  done
+
+  wait_for_jobs_or_die "MMBench(en) inference" "${pids[@]}"
+  merge_chunk_outputs "${merged_file}" "${chunk_dir}" "${chunks}"
 
   run_from_llava scripts/convert_mmbench_for_submission.py \
     --annotation-file "./playground/data/eval/mmbench/${split}.tsv" \
@@ -641,14 +701,31 @@ run_mmbench_cn() {
   fi
   require_file "${LLAVA_DIR}/${question_file#./}"
 
-  run_from_llava -m llava.eval.model_vqa_mmbench \
-    "${MODEL_PATH_ARGS[@]}" \
-    --question-file "${question_file}" \
-    --answers-file "${base_dir}/answers/${split}/${CURRENT_MODEL_ID}.jsonl" \
-    --lang cn \
-    --single-pred-prompt \
-    --temperature 0 \
-    --conv-mode "${CONV_MODE}"
+  parse_gpu_list_or_die
+  local gpu_list="${GPUS// /}"
+  local chunks="${#PARSED_GPUS[@]}"
+  local chunk_dir="${LLAVA_DIR}/${base_dir#./}/answers/${split}/${CURRENT_MODEL_ID}_chunks"
+  local merged_file="${LLAVA_DIR}/${base_dir#./}/answers/${split}/${CURRENT_MODEL_ID}.jsonl"
+  log "Running MMBench(cn) with ${chunks} chunk(s) on GPU list: ${gpu_list}"
+
+  local -a pids=()
+  local idx=0
+  for idx in "${!PARSED_GPUS[@]}"; do
+    CUDA_VISIBLE_DEVICES="${PARSED_GPUS[${idx}]}" run_from_llava -m llava.eval.model_vqa_mmbench \
+      "${MODEL_PATH_ARGS[@]}" \
+      --question-file "${question_file}" \
+      --answers-file "${base_dir}/answers/${split}/${CURRENT_MODEL_ID}_chunks/${chunks}_${idx}.jsonl" \
+      --num-chunks "${chunks}" \
+      --chunk-idx "${idx}" \
+      --lang cn \
+      --single-pred-prompt \
+      --temperature 0 \
+      --conv-mode "${CONV_MODE}" &
+    pids+=("$!")
+  done
+
+  wait_for_jobs_or_die "MMBench(cn) inference" "${pids[@]}"
+  merge_chunk_outputs "${merged_file}" "${chunk_dir}" "${chunks}"
 
   run_from_llava scripts/convert_mmbench_for_submission.py \
     --annotation-file "${question_file}" \
@@ -665,13 +742,30 @@ run_llava_wild() {
   require_file "${EVAL_DIR}/llava-bench-in-the-wild/answers_gpt4.jsonl"
   require_dir "${EVAL_DIR}/llava-bench-in-the-wild/images"
 
-  run_from_llava -m llava.eval.model_vqa \
-    "${MODEL_PATH_ARGS[@]}" \
-    --question-file "./playground/data/eval/llava-bench-in-the-wild/questions.jsonl" \
-    --image-folder "./playground/data/eval/llava-bench-in-the-wild/images" \
-    --answers-file "./playground/data/eval/llava-bench-in-the-wild/answers/${CURRENT_MODEL_ID}.jsonl" \
-    --temperature 0 \
-    --conv-mode "${CONV_MODE}"
+  parse_gpu_list_or_die
+  local gpu_list="${GPUS// /}"
+  local chunks="${#PARSED_GPUS[@]}"
+  local chunk_dir="${EVAL_DIR}/llava-bench-in-the-wild/answers_chunks/${CURRENT_MODEL_ID}"
+  local merged_file="${EVAL_DIR}/llava-bench-in-the-wild/answers/${CURRENT_MODEL_ID}.jsonl"
+  log "Running LLaVA-in-the-Wild with ${chunks} chunk(s) on GPU list: ${gpu_list}"
+
+  local -a pids=()
+  local idx=0
+  for idx in "${!PARSED_GPUS[@]}"; do
+    CUDA_VISIBLE_DEVICES="${PARSED_GPUS[${idx}]}" run_from_llava -m llava.eval.model_vqa \
+      "${MODEL_PATH_ARGS[@]}" \
+      --question-file "./playground/data/eval/llava-bench-in-the-wild/questions.jsonl" \
+      --image-folder "./playground/data/eval/llava-bench-in-the-wild/images" \
+      --answers-file "./playground/data/eval/llava-bench-in-the-wild/answers_chunks/${CURRENT_MODEL_ID}/${chunks}_${idx}.jsonl" \
+      --num-chunks "${chunks}" \
+      --chunk-idx "${idx}" \
+      --temperature 0 \
+      --conv-mode "${CONV_MODE}" &
+    pids+=("$!")
+  done
+
+  wait_for_jobs_or_die "LLaVA-in-the-Wild inference" "${pids[@]}"
+  merge_chunk_outputs "${merged_file}" "${chunk_dir}" "${chunks}"
 
   if [[ "${LLAVA_REVIEW}" -eq 1 ]]; then
     [[ -n "${OPENAI_API_KEY:-}" ]] || die "--llava-review requires OPENAI_API_KEY."
@@ -699,13 +793,30 @@ run_mme() {
   require_file "${EVAL_DIR}/MME/convert_answer_to_mme.py"
   require_file "${EVAL_DIR}/MME/eval_tool/calculation.py"
 
-  run_from_llava -m llava.eval.model_vqa_loader \
-    "${MODEL_PATH_ARGS[@]}" \
-    --question-file "./playground/data/eval/MME/llava_mme.jsonl" \
-    --image-folder "./playground/data/eval/MME/MME_Benchmark_release_version" \
-    --answers-file "./playground/data/eval/MME/answers/${CURRENT_MODEL_ID}.jsonl" \
-    --temperature 0 \
-    --conv-mode "${CONV_MODE}"
+  parse_gpu_list_or_die
+  local gpu_list="${GPUS// /}"
+  local chunks="${#PARSED_GPUS[@]}"
+  local chunk_dir="${EVAL_DIR}/MME/answers_chunks/${CURRENT_MODEL_ID}"
+  local merged_file="${EVAL_DIR}/MME/answers/${CURRENT_MODEL_ID}.jsonl"
+  log "Running MME with ${chunks} chunk(s) on GPU list: ${gpu_list}"
+
+  local -a pids=()
+  local idx=0
+  for idx in "${!PARSED_GPUS[@]}"; do
+    CUDA_VISIBLE_DEVICES="${PARSED_GPUS[${idx}]}" run_from_llava -m llava.eval.model_vqa_loader \
+      "${MODEL_PATH_ARGS[@]}" \
+      --question-file "./playground/data/eval/MME/llava_mme.jsonl" \
+      --image-folder "./playground/data/eval/MME/MME_Benchmark_release_version" \
+      --answers-file "./playground/data/eval/MME/answers_chunks/${CURRENT_MODEL_ID}/${chunks}_${idx}.jsonl" \
+      --num-chunks "${chunks}" \
+      --chunk-idx "${idx}" \
+      --temperature 0 \
+      --conv-mode "${CONV_MODE}" &
+    pids+=("$!")
+  done
+
+  wait_for_jobs_or_die "MME inference" "${pids[@]}"
+  merge_chunk_outputs "${merged_file}" "${chunk_dir}" "${chunks}"
 
   (
     cd "${EVAL_DIR}/MME"
