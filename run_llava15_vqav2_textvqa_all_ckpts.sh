@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EVAL_SCRIPT="${ROOT_DIR}/llava15_official_eval.sh"
 
-BASE_CHECKPOINT_DIR="${BASE_CHECKPOINT_DIR:-/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/llava-v1.5-7b-lora-v2-vision-flan-selected-t050-range0}"
+BASE_CHECKPOINT_DIR="${BASE_CHECKPOINT_DIR:-/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints}"
 MODEL_BASE="${MODEL_BASE:-lmsys/vicuna-7b-v1.5}"
 BENCHMARKS="${BENCHMARKS:-all}"
 GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
