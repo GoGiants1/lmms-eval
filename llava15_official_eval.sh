@@ -31,6 +31,7 @@ CONV_MODE="vicuna_v1"
 GPUS="${CUDA_VISIBLE_DEVICES:-0}"
 LLAVA_REVIEW=0
 FORCE=0
+SKIP_EXISTING=0
 DOWNLOAD_WORKERS=3
 HF_DOWNLOAD_WORKERS=16
 FILE_DOWNLOAD_WORKERS=16
@@ -68,7 +69,7 @@ Actions:
 
 Options:
   --benchmarks LIST   Comma-separated benchmark list.
-                      Supported: vqav2,textvqa,mmbench,mmbench_cn,llava_wild,mme
+                      Supported: vqav2,textvqa,mmbench,mmbench_cn,scienceqa,llava_wild,mme
                       Default: all
   --model-path PATH   Single model path or HF id to evaluate.
   --model-paths LIST  Comma-separated model paths/HF ids to evaluate.
@@ -109,10 +110,12 @@ Options:
   --file-download-workers N
                       Per-file parallel connections (used when aria2c exists). Default: 16
   --force             Re-download/re-extract files even if target exists.
+  --skip-existing     Skip benchmark runs when final output for current model already exists.
+                      (ignored when --force is set)
   -h, --help          Show this help.
 
 Examples:
-  ./llava15_official_eval.sh download --benchmarks vqav2,textvqa,mmbench,mmbench_cn,llava_wild,mme
+  ./llava15_official_eval.sh download --benchmarks vqav2,textvqa,mmbench,mmbench_cn,scienceqa,llava_wild,mme
   ./llava15_official_eval.sh run --benchmarks vqav2,textvqa --model-path liuhaotian/llava-v1.5-7b --gpus 0,1
   ./llava15_official_eval.sh run --model-scripts llava_7b.sh,llava_7b_2.sh,llava_7b_3.sh
   ./llava15_official_eval.sh run --model-script-tree --checkpoint-roots /path/runA,/path/runB
@@ -213,6 +216,9 @@ normalize_benchmark() {
     mmbench_cn|mmbench-cn|mmbenchcn)
       echo "mmbench_cn"
       ;;
+    scienceqa|science_qa|sqa)
+      echo "scienceqa"
+      ;;
     llava_wild|llava-wild|llava_bench|llava-bench|llava_in_the_wild|llava-in-the-wild|llavabench)
       echo "llava_wild"
       ;;
@@ -228,7 +234,7 @@ normalize_benchmark() {
 resolve_benchmarks() {
   SELECTED_BENCHMARKS=()
   if [[ "${BENCHMARKS}" == "all" ]]; then
-    SELECTED_BENCHMARKS=("vqav2" "textvqa" "mmbench" "mmbench_cn" "llava_wild" "mme")
+    SELECTED_BENCHMARKS=("vqav2" "textvqa" "mmbench" "mmbench_cn" "scienceqa" "llava_wild" "mme")
     return
   fi
 
@@ -527,6 +533,38 @@ download_mmbench_cn() {
     "${EVAL_DIR}/mmbench_cn/mmbench_dev_cn_20231003.tsv"
 }
 
+download_scienceqa() {
+  local base_dir="${EVAL_DIR}/scienceqa"
+  local image_dir="${base_dir}/images/test"
+  local test_image_zip="${CACHE_DIR}/scienceqa/test.zip"
+  local test_image_url="${SCIENCEQA_TEST_IMAGE_URL:-https://scienceqa.s3.us-west-1.amazonaws.com/images/test.zip}"
+  mkdir -p "${base_dir}"
+
+  # As documented in LLaVA Evaluation.md, these metadata files come from ScienceQA repo.
+  download_file \
+    "https://raw.githubusercontent.com/lupantech/ScienceQA/main/data/scienceqa/pid_splits.json" \
+    "${base_dir}/pid_splits.json"
+  download_file \
+    "https://raw.githubusercontent.com/lupantech/ScienceQA/main/data/scienceqa/problems.json" \
+    "${base_dir}/problems.json"
+
+  if [[ ! -d "${image_dir}" || "${FORCE}" -eq 1 ]]; then
+    # Align with ScienceQA official download script (tools/download.sh).
+    download_file "${test_image_url}" "${test_image_zip}"
+    mkdir -p "${base_dir}/images"
+    extract_zip "${test_image_zip}" "${base_dir}/images"
+  else
+    log "Skip ScienceQA test images (already exists): ${image_dir}"
+  fi
+
+  if [[ ! -f "${base_dir}/llava_test_CQM-A.json" ]]; then
+    log "ScienceQA question file missing: ${base_dir}/llava_test_CQM-A.json (expected from eval.zip)."
+  fi
+  if [[ ! -d "${image_dir}" ]]; then
+    log "ScienceQA image directory missing: ${image_dir}. Download images from ScienceQA repo data/scienceqa/images."
+  fi
+}
+
 download_llava_wild() {
   local target_dir="${EVAL_DIR}/llava-bench-in-the-wild"
 
@@ -727,6 +765,8 @@ run_mmbench_cn() {
   wait_for_jobs_or_die "MMBench(cn) inference" "${pids[@]}"
   merge_chunk_outputs "${merged_file}" "${chunk_dir}" "${chunks}"
 
+  mkdir -p "${LLAVA_DIR}/${base_dir#./}/answers_upload/${split}"
+
   run_from_llava scripts/convert_mmbench_for_submission.py \
     --annotation-file "${question_file}" \
     --result-dir "${base_dir}/answers/${split}" \
@@ -734,6 +774,45 @@ run_mmbench_cn() {
     --experiment "${CURRENT_MODEL_ID}"
 
   log "MMBench(cn) done. Upload dir: ${LLAVA_DIR}/${base_dir#./}/answers_upload/${split}"
+}
+
+run_scienceqa() {
+  local base_dir="./playground/data/eval/scienceqa"
+  local answer_file="${base_dir}/answers/${CURRENT_MODEL_ID}.jsonl"
+  local output_file="${base_dir}/answers/${CURRENT_MODEL_ID}_output.jsonl"
+  local output_result="${base_dir}/answers/${CURRENT_MODEL_ID}_result.json"
+
+  require_file "${EVAL_DIR}/scienceqa/llava_test_CQM-A.json"
+  require_dir "${EVAL_DIR}/scienceqa/images/test"
+  require_file "${EVAL_DIR}/scienceqa/pid_splits.json"
+  require_file "${EVAL_DIR}/scienceqa/problems.json"
+
+  # Keep ScienceQA aligned with official script (single-GPU inference).
+  parse_gpu_list_or_die
+  local gpu="${PARSED_GPUS[0]}"
+  local gpu_list="${GPUS// /}"
+  if [[ "${#PARSED_GPUS[@]}" -gt 1 ]]; then
+    log "ScienceQA uses a single GPU in official eval; using first GPU (${gpu}) from: ${gpu_list}"
+  else
+    log "Running ScienceQA on GPU: ${gpu}"
+  fi
+
+  CUDA_VISIBLE_DEVICES="${gpu}" run_from_llava -m llava.eval.model_vqa_science \
+    "${MODEL_PATH_ARGS[@]}" \
+    --question-file "${base_dir}/llava_test_CQM-A.json" \
+    --image-folder "${base_dir}/images/test" \
+    --answers-file "${answer_file}" \
+    --single-pred-prompt \
+    --temperature 0 \
+    --conv-mode "${CONV_MODE}"
+
+  run_from_llava llava/eval/eval_science_qa.py \
+    --base-dir "${base_dir}" \
+    --result-file "${answer_file}" \
+    --output-file "${output_file}" \
+    --output-result "${output_result}"
+
+  log "ScienceQA done. Result file: ${EVAL_DIR}/scienceqa/answers/${CURRENT_MODEL_ID}_result.json"
 }
 
 run_llava_wild() {
@@ -828,6 +907,40 @@ run_mme() {
   log "MME done. Result dir: ${EVAL_DIR}/MME/eval_tool/answers/${CURRENT_MODEL_ID}"
 }
 
+benchmark_result_exists() {
+  local benchmark="$1"
+  case "${benchmark}" in
+    vqav2)
+      [[ -f "${EVAL_DIR}/vqav2/answers_upload/llava_vqav2_mscoco_test-dev2015/${CURRENT_MODEL_ID}.json" ]]
+      ;;
+    textvqa)
+      [[ -f "${EVAL_DIR}/textvqa/answers/${CURRENT_MODEL_ID}.jsonl" ]]
+      ;;
+    mmbench)
+      [[ -f "${EVAL_DIR}/mmbench/answers/mmbench_dev_20230712/${CURRENT_MODEL_ID}.jsonl" ]]
+      ;;
+    mmbench_cn)
+      [[ -f "${EVAL_DIR}/mmbench_cn/answers/mmbench_dev_cn_20231003/${CURRENT_MODEL_ID}.jsonl" || -f "${EVAL_DIR}/mmbench/answers/mmbench_dev_cn_20231003/${CURRENT_MODEL_ID}.jsonl" ]]
+      ;;
+    scienceqa)
+      [[ -f "${EVAL_DIR}/scienceqa/answers/${CURRENT_MODEL_ID}_result.json" ]]
+      ;;
+    llava_wild)
+      if [[ "${LLAVA_REVIEW}" -eq 1 ]]; then
+        [[ -f "${EVAL_DIR}/llava-bench-in-the-wild/reviews/${CURRENT_MODEL_ID}.jsonl" ]]
+      else
+        [[ -f "${EVAL_DIR}/llava-bench-in-the-wild/answers/${CURRENT_MODEL_ID}.jsonl" ]]
+      fi
+      ;;
+    mme)
+      [[ -f "${EVAL_DIR}/MME/answers/${CURRENT_MODEL_ID}.jsonl" ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 download_one_benchmark() {
   local benchmark=""
   benchmark="$1"
@@ -843,6 +956,9 @@ download_one_benchmark() {
       ;;
     mmbench_cn)
       download_mmbench_cn
+      ;;
+    scienceqa)
+      download_scienceqa
       ;;
     llava_wild)
       download_llava_wild
@@ -900,6 +1016,10 @@ download_selected() {
 run_selected() {
   local benchmark=""
   for benchmark in "${SELECTED_BENCHMARKS[@]}"; do
+    if [[ "${SKIP_EXISTING}" -eq 1 && "${FORCE}" -eq 0 ]] && benchmark_result_exists "${benchmark}"; then
+      log "Skip benchmark (existing result): ${benchmark} [model_id=${CURRENT_MODEL_ID}]"
+      continue
+    fi
     log "Running benchmark: ${benchmark}"
     case "${benchmark}" in
       vqav2)
@@ -913,6 +1033,9 @@ run_selected() {
         ;;
       mmbench_cn)
         run_mmbench_cn
+        ;;
+      scienceqa)
+        run_scienceqa
         ;;
       llava_wild)
         run_llava_wild
@@ -1053,6 +1176,10 @@ parse_args() {
         ;;
       --force)
         FORCE=1
+        shift
+        ;;
+      --skip-existing)
+        SKIP_EXISTING=1
         shift
         ;;
       -h|--help)
