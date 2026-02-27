@@ -272,9 +272,7 @@ def _print_table(rows: Iterable[EvalRow]) -> None:
 
     print("benchmark\tmodel_id\tscore(%)\tcorrect/total\tparsed\tnote")
     for row in sorted(rows, key=lambda x: (x.benchmark, x.model_id)):
-        print(
-            f"{row.benchmark}\t{row.model_id}\t{row.score:.2f}\t{row.correct}/{row.total}\t{row.parsed}/{row.total}\t{row.note}"
-        )
+        print(f"{row.benchmark}\t{row.model_id}\t{row.score:.2f}\t{row.correct}/{row.total}\t{row.parsed}/{row.total}\t{row.note}")
 
 
 def parse_args() -> argparse.Namespace:
