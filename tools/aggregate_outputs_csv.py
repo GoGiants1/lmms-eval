@@ -9,6 +9,7 @@ import sys
 from typing import Any, Dict, Tuple
 
 DATE_RE = re.compile(r"^(\\d{8}_\\d{6})_results\\.json$")
+TOTAL_EXCLUDED_TASKS = {"mme_perception_score", "mme_cognition_score"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,16 +51,33 @@ def numeric_keys(result_obj: Dict[str, Any]) -> list:
     return keys
 
 
+def get_numeric_metric(result_obj: Dict[str, Any], metric_name: str) -> Tuple[float, str]:
+    for key in (f"{metric_name},none", metric_name):
+        val = result_obj.get(key)
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            return val, key
+    return None, None
+
+
+def pick_mme_metrics(result_obj: Dict[str, Any]) -> Dict[str, Tuple[float, str]]:
+    metrics: Dict[str, Tuple[float, str]] = {}
+
+    perception_val, perception_key = get_numeric_metric(result_obj, "mme_perception_score")
+    cognition_val, cognition_key = get_numeric_metric(result_obj, "mme_cognition_score")
+
+    if perception_val is not None:
+        metrics["mme_perception_score"] = (perception_val, perception_key)
+    if cognition_val is not None:
+        metrics["mme_cognition_score"] = (cognition_val, cognition_key)
+    if perception_val is not None and cognition_val is not None:
+        metrics["mme"] = (perception_val + cognition_val, "mme_total_score")
+
+    return metrics
+
+
 def pick_metric(task: str, result_obj: Dict[str, Any], config_obj: Dict[str, Any]) -> Tuple[float, str]:
     if result_obj is None:
         return None, None
-
-    # MME total score (perception + cognition)
-    if task == "mme":
-        perception = result_obj.get("mme_perception_score,none")
-        cognition = result_obj.get("mme_cognition_score,none")
-        if isinstance(perception, (int, float)) and isinstance(cognition, (int, float)):
-            return perception + cognition, "mme_total_score"
 
     metric_list = config_obj.get("metric_list") if isinstance(config_obj, dict) else None
     if isinstance(metric_list, list):
@@ -121,13 +139,23 @@ def main() -> int:
         configs = data.get("configs") or {}
 
         for task, task_results in results.items():
+            model_entry = rows.setdefault(model, {"values": {}, "dates": {}})
+
+            if task == "mme":
+                for mme_task, (value, metric_key) in pick_mme_metrics(task_results).items():
+                    if mme_task not in metrics_used:
+                        metrics_used[mme_task] = metric_key
+                    prev_date = model_entry["dates"].get(mme_task, 0)
+                    if date_num >= prev_date:
+                        model_entry["values"][mme_task] = value
+                        model_entry["dates"][mme_task] = date_num
+                continue
+
             value, metric_key = pick_metric(task, task_results, configs.get(task, {}))
             if value is None:
                 continue
             if task not in metrics_used:
                 metrics_used[task] = metric_key
-
-            model_entry = rows.setdefault(model, {"values": {}, "dates": {}})
             prev_date = model_entry["dates"].get(task, 0)
             if date_num >= prev_date:
                 model_entry["values"][task] = value
@@ -144,7 +172,9 @@ def main() -> int:
             entry = rows[model]["values"]
             row_vals = [entry.get(task, "") for task in tasks]
             total = 0.0
-            for val in row_vals:
+            for task, val in zip(tasks, row_vals):
+                if task in TOTAL_EXCLUDED_TASKS:
+                    continue
                 if isinstance(val, (int, float)) and not isinstance(val, bool):
                     total += float(val)
             writer.writerow([model] + row_vals + [total])
