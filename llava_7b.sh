@@ -40,7 +40,7 @@ MODEL_PATHS=${MODEL_PATHS:-$(IFS=,; echo "${DEFAULT_MODEL_PATHS[*]}")}
 EVAL_MERGED=${EVAL_MERGED:-0}
 MERGED_ROOT=${MERGED_ROOT:-/mnt/tmp/llava}
 
-# Checkpoint-tree eval mode: evaluate checkpoint-* directories under one or more roots.
+# Checkpoint-tree eval mode: evaluate directories matching CHECKPOINT_GLOB under one or more roots.
 # Example:
 #   EVAL_CHECKPOINT_TREE=1 CHECKPOINT_ROOTS=/path/runA,/path/runB ./llava_7b.sh
 EVAL_CHECKPOINT_TREE=${EVAL_CHECKPOINT_TREE:-1}
@@ -53,7 +53,10 @@ CHECKPOINT_ROOTS=${CHECKPOINT_ROOTS:-$(IFS=,; echo "${DEFAULT_CHECKPOINT_ROOTS[*
 if [[ -n "$CHECKPOINT_ROOT" ]]; then
 	CHECKPOINT_ROOTS="$CHECKPOINT_ROOT"
 fi
-CHECKPOINT_GLOB=${CHECKPOINT_GLOB:-scorer_*}
+# Current training outputs under CHECKPOINT_ROOT are named like:
+#   block_*__scorer_*  or  scorer_*
+# so use a broader default glob than scorer_*.
+CHECKPOINT_GLOB=${CHECKPOINT_GLOB:-*scorer*}
 CHECKPOINT_REQUIRED_FILE=${CHECKPOINT_REQUIRED_FILE:-adapter_model.safetensors}
 # Optional checkpoint step filter (python-style): start:end:offset
 # Example: CHECKPOINT_RANGE=100:3000:500 -> 100,600,1100,1600,2100,2600
