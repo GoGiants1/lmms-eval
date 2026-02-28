@@ -23,7 +23,7 @@ MODEL_PATH=${MODEL_PATH:-liuhaotian/llava-v1.5-7b}
 #   MODEL_PATHS=liuhaotian/llava-v1.5-7b,liuhaotian/llava-v1.5-13b
 
 MODEL_BASE_PATHS=${MODEL_BASE_PATHS:-/mnt/tmp/llava}
-MODEL_BASE=${MODEL_BASE:-}
+MODEL_BASE=${MODEL_BASE:-lmsys/vicuna-7b-v1.5}
 
 DEFAULT_MODEL_PATHS=(
 	liuhaotian/llava-v1.5-7b
@@ -44,16 +44,16 @@ MERGED_ROOT=${MERGED_ROOT:-/mnt/tmp/llava}
 # Example:
 #   EVAL_CHECKPOINT_TREE=1 CHECKPOINT_ROOTS=/path/runA,/path/runB ./llava_7b.sh
 EVAL_CHECKPOINT_TREE=${EVAL_CHECKPOINT_TREE:-1}
-CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-}
+CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints}
 DEFAULT_CHECKPOINT_ROOTS=(
-	"/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/checkpoints/llava-v1.5-7b-lora-v2"
+	# "/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/checkpoints/llava-v1.5-7b-lora-v2"
 	# "/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/checkpoints/llava-v1.5-7b-lora-v2-vision-flan"
 )
 CHECKPOINT_ROOTS=${CHECKPOINT_ROOTS:-$(IFS=,; echo "${DEFAULT_CHECKPOINT_ROOTS[*]}")}
 if [[ -n "$CHECKPOINT_ROOT" ]]; then
 	CHECKPOINT_ROOTS="$CHECKPOINT_ROOT"
 fi
-CHECKPOINT_GLOB=${CHECKPOINT_GLOB:-checkpoint-*}
+CHECKPOINT_GLOB=${CHECKPOINT_GLOB:-scorer_*}
 CHECKPOINT_REQUIRED_FILE=${CHECKPOINT_REQUIRED_FILE:-adapter_model.safetensors}
 # Optional checkpoint step filter (python-style): start:end:offset
 # Example: CHECKPOINT_RANGE=100:3000:500 -> 100,600,1100,1600,2100,2600
@@ -132,7 +132,7 @@ SINGLE_PROCESS_TASKS="naturalbench"
 # - TextVQA_VAL           -> textvqa_val
 # - DocVQA_VAL            -> docvqa_val
 # - OCRBench              -> ocrbench
-EXTRA_TASKS="blink,seedbench,amber_g,vstar_bench,ocrbench"
+EXTRA_TASKS="seedbench,amber_g,vstar_bench,ocrbench"
 
 
 case "$TASK_SET" in
