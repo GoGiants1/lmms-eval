@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EVAL_SCRIPT="${ROOT_DIR}/llava15_official_eval.sh"
 ENV_FILE="${ROOT_DIR}/.env"
 SCORE_SCRIPT="${ROOT_DIR}/score_llava15_mmbench_textvqa_scienceqa.py"
+
+# llava in the wild
+uv pip install openai==0.28.0
 
 BASE_CHECKPOINT_DIR="${BASE_CHECKPOINT_DIR:-/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints}"
 

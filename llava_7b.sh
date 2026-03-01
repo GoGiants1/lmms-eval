@@ -3,7 +3,7 @@ set -euo pipefail
 
 # FIXME: only for cluster with module system (e.g., SLURM)
 # ml load cuda/11.8
-
+bash env.sh
 source .venv/bin/activate
 
 ENV_FILE="${ENV_FILE:-.env}"
