@@ -41,7 +41,7 @@ if [[ -f "${ENV_FILE}" ]]; then
 fi
 
 # Allow MODEL_PATHS to be set externally (for merged models or manual specification)
-if [[ -z "${MODEL_PATHS}" ]]; then
+if [[ -z "${MODEL_PATHS:-}" ]]; then
   MODEL_PATHS="$(
     find "${BASE_CHECKPOINT_DIR}" -type f -name adapter_config.json -printf '%h\n' \
     | grep -Ei '/[^/]*lora[^/]*/?$' \
