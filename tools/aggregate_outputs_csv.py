@@ -79,6 +79,12 @@ def pick_metric(task: str, result_obj: Dict[str, Any], config_obj: Dict[str, Any
     if result_obj is None:
         return None, None
 
+    if task == "pope" or task.startswith("pope_"):
+        for key in ("pope_f1_score,none", "pope_f1_score"):
+            val = result_obj.get(key)
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                return val, key
+
     metric_list = config_obj.get("metric_list") if isinstance(config_obj, dict) else None
     if isinstance(metric_list, list):
         for metric in metric_list:

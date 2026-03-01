@@ -44,7 +44,7 @@ MERGED_ROOT=${MERGED_ROOT:-/mnt/tmp/llava}
 # Example:
 #   EVAL_CHECKPOINT_TREE=1 CHECKPOINT_ROOTS=/path/runA,/path/runB ./llava_7b.sh
 EVAL_CHECKPOINT_TREE=${EVAL_CHECKPOINT_TREE:-1}
-CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/llava-v1.5-7b-lora-v2-llava-selected-t050-range0-r20-3methods}
+CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/llava-v1.5-7b-lora-v2-llava-selected-t050-ranges-r20-5methods}
 DEFAULT_CHECKPOINT_ROOTS=(
 	# "/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/checkpoints/llava-v1.5-7b-lora-v2"
 	# "/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/checkpoints/llava-v1.5-7b-lora-v2-vision-flan"
@@ -53,14 +53,15 @@ CHECKPOINT_ROOTS=${CHECKPOINT_ROOTS:-$(IFS=,; echo "${DEFAULT_CHECKPOINT_ROOTS[*
 if [[ -n "$CHECKPOINT_ROOT" ]]; then
 	CHECKPOINT_ROOTS="$CHECKPOINT_ROOT"
 fi
-# Current training outputs under CHECKPOINT_ROOT are named like:
-#   block_*__scorer_*  or  scorer_*
-# so use a broader default glob than scorer_*.
+# Current training outputs under CHECKPOINT_ROOT may be nested (e.g., range*/block_*__scorer_*).
+# We recursively find matching directories under CHECKPOINT_ROOT and filter by CHECKPOINT_REQUIRED_FILE.
 CHECKPOINT_GLOB=${CHECKPOINT_GLOB:-*scorer*}
 CHECKPOINT_REQUIRED_FILE=${CHECKPOINT_REQUIRED_FILE:-adapter_model.safetensors}
 # Optional checkpoint step filter (python-style): start:end:offset
 # Example: CHECKPOINT_RANGE=100:3000:500 -> 100,600,1100,1600,2100,2600
-CHECKPOINT_RANGE=${CHECKPOINT_RANGE:-100:5200:200}
+# NOTE: This applies only to directory basenames like "checkpoint-<step>".
+# For scorer-style directories (no checkpoint-*), leave empty (default) to avoid confusion.
+CHECKPOINT_RANGE=${CHECKPOINT_RANGE:-}
 # Parsed numeric values from CHECKPOINT_RANGE; set only when CHECKPOINT_RANGE is non-empty.
 CHECKPOINT_RANGE_START=
 CHECKPOINT_RANGE_END=
@@ -98,9 +99,10 @@ if [[ "$SKIP_EXISTING" != "0" && "$SKIP_EXISTING" != "1" ]]; then
 fi
 
 # Ordering for bulk eval list:
-# - SORT_MODE=version  (default; natural sort, good for r20,r40,r100)
-# - SORT_MODE=path     (pure lexicographic path sort)
-SORT_MODE=${SORT_MODE:-version}
+# - SORT_MODE=version      (natural sort, good for r20,r40,r100)
+# - SORT_MODE=path         (pure lexicographic path sort)
+# - SORT_MODE=path_reverse (reverse lexicographic path sort)
+SORT_MODE=${SORT_MODE:-path_reverse}
 
 # Optional: move matching checkpoints to the front (comma-separated glob patterns).
 # Matching is attempted against both the full path and the basename.
@@ -369,8 +371,8 @@ run_tasks() {
 }
 
 if [[ "$EVAL_CHECKPOINT_TREE" == "1" ]]; then
-	if [[ "$SORT_MODE" != "version" && "$SORT_MODE" != "path" ]]; then
-		echo "Unknown SORT_MODE: $SORT_MODE (expected: version|path)" >&2
+	if [[ "$SORT_MODE" != "version" && "$SORT_MODE" != "path" && "$SORT_MODE" != "path_reverse" ]]; then
+		echo "Unknown SORT_MODE: $SORT_MODE (expected: version|path|path_reverse)" >&2
 		exit 2
 	fi
 
@@ -391,6 +393,8 @@ if [[ "$EVAL_CHECKPOINT_TREE" == "1" ]]; then
 
 	declare -a TREE_CKPTS=()
 	declare -a TREE_ROOT_NAMES=()
+	declare -a TREE_REL_PATHS=()
+	declare -a TREE_SUFFIX_TAGS=()
 
 	echo "Checkpoint-tree mode enabled." >&2
 	echo "Tasks: $TASKS" >&2
@@ -423,6 +427,8 @@ if [[ "$EVAL_CHECKPOINT_TREE" == "1" ]]; then
 
 		if [[ "$SORT_MODE" == "version" ]]; then
 			mapfile -d '' ROOT_CKPTS < <(find "$checkpoint_root" -type d -name "$CHECKPOINT_GLOB" -print0 | sort -z -V)
+		elif [[ "$SORT_MODE" == "path_reverse" ]]; then
+			mapfile -d '' ROOT_CKPTS < <(find "$checkpoint_root" -type d -name "$CHECKPOINT_GLOB" -print0 | sort -z -r)
 		else
 			mapfile -d '' ROOT_CKPTS < <(find "$checkpoint_root" -type d -name "$CHECKPOINT_GLOB" -print0 | sort -z)
 		fi
@@ -534,10 +540,17 @@ if [[ "$EVAL_CHECKPOINT_TREE" == "1" ]]; then
 		for i in "${!ROOT_CKPTS[@]}"; do
 			ckpt_dir="${ROOT_CKPTS[$i]}"
 			ckpt_name="$(basename "$ckpt_dir")"
+			ckpt_rel="${ckpt_dir#"$checkpoint_root"/}"
+			if [[ "$ckpt_rel" == "$ckpt_dir" || -z "$ckpt_rel" ]]; then
+				ckpt_rel="$ckpt_name"
+			fi
+			ckpt_tag="$(model_tag_for_path "$ckpt_rel")"
 			printf '  %3d/%3d  %s\n' "$((i + 1))" "${#ROOT_CKPTS[@]}" "$ckpt_dir" >&2
-			echo "         -> output: $OUTPUT_ROOT/$root_name/$ckpt_name/" >&2
+			echo "         -> output: $OUTPUT_ROOT/$root_name/$ckpt_rel/" >&2
 			TREE_CKPTS+=("$ckpt_dir")
 			TREE_ROOT_NAMES+=("$root_name")
+			TREE_REL_PATHS+=("$ckpt_rel")
+			TREE_SUFFIX_TAGS+=("$ckpt_tag")
 		done
 	done
 
@@ -556,9 +569,10 @@ if [[ "$EVAL_CHECKPOINT_TREE" == "1" ]]; then
 	for i in "${!TREE_CKPTS[@]}"; do
 		ckpt_dir="${TREE_CKPTS[$i]}"
 		root_name="${TREE_ROOT_NAMES[$i]}"
-		ckpt_name="$(basename "$ckpt_dir")"
-		out_dir="$OUTPUT_ROOT/$root_name/$ckpt_name/"
-		suffix="$LOG_SUFFIX-$root_name-$ckpt_name"
+		ckpt_rel="${TREE_REL_PATHS[$i]}"
+		ckpt_tag="${TREE_SUFFIX_TAGS[$i]}"
+		out_dir="$OUTPUT_ROOT/$root_name/$ckpt_rel/"
+		suffix="$LOG_SUFFIX-$root_name-$ckpt_tag"
 		echo "=== [$((i + 1))/${#TREE_CKPTS[@]}] Evaluating: $ckpt_dir" >&2
 
 		run_tasks "$ckpt_dir" "$out_dir" "$suffix" "$TASKS"
@@ -578,10 +592,12 @@ if [[ "$EVAL_MERGED" == "1" ]]; then
 
 	if [[ "$SORT_MODE" == "version" ]]; then
 		mapfile -d '' MERGED_CKPTS < <(find "$MERGED_ROOT" -type d -name '*_merged*' -print0 | sort -z -V)
+	elif [[ "$SORT_MODE" == "path_reverse" ]]; then
+		mapfile -d '' MERGED_CKPTS < <(find "$MERGED_ROOT" -type d -name '*_merged*' -print0 | sort -z -r)
 	elif [[ "$SORT_MODE" == "path" ]]; then
 		mapfile -d '' MERGED_CKPTS < <(find "$MERGED_ROOT" -type d -name '*_merged*' -print0 | sort -z)
 	else
-		echo "Unknown SORT_MODE: $SORT_MODE (expected: version|path)" >&2
+		echo "Unknown SORT_MODE: $SORT_MODE (expected: version|path|path_reverse)" >&2
 		exit 2
 	fi
 
