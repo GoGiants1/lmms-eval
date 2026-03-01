@@ -579,13 +579,13 @@ download_gqa() {
     log "Skip GQA images (already exists): ${image_dir}"
   fi
 
-  if [[ ! -f "${data_dir}/eval/eval.py" || "${FORCE}" -eq 1 ]]; then
+  if [[ ! -f "${data_dir}/eval.py" || "${FORCE}" -eq 1 ]]; then
     download_file "${eval_zip_url}" "${eval_zip}"
     extract_zip "${eval_zip}" "${data_dir}"
   fi
 
-  if [[ ! -f "${data_dir}/eval/eval.py" ]]; then
-    log "GQA eval script missing: ${data_dir}/eval/eval.py"
+  if [[ ! -f "${data_dir}/eval.py" ]]; then
+    log "GQA eval script missing: ${data_dir}/eval.py"
     log "Follow LLaVA/docs/Evaluation.md and place official GQA evaluation scripts under ${data_dir}."
   fi
 }
@@ -763,7 +763,7 @@ run_gqa() {
   local split="llava_gqa_testdev_balanced"
   local gqa_image_dir=""
   require_file "${EVAL_DIR}/gqa/${split}.jsonl"
-  require_file "${EVAL_DIR}/gqa/data/eval/eval.py"
+  require_file "${EVAL_DIR}/gqa/data/eval.py"
   gqa_image_dir="$(resolve_gqa_image_dir || true)"
   [[ -n "${gqa_image_dir}" ]] || die "GQA image directory not found. Set GQA_IMAGE_DIR or prepare ${EVAL_DIR}/gqa/data/images (or ${GQA_SHARED_DATA_DIR}/images)."
   require_dir "${gqa_image_dir}"
@@ -804,7 +804,7 @@ run_gqa() {
   (
     cd "${EVAL_DIR}/gqa/data"
     cp "${per_model_pred}" "./testdev_balanced_predictions.json"
-    "${PYTHON_CMD[@]}" eval/eval.py --tier testdev_balanced
+    "${PYTHON_CMD[@]}" eval.py --tier testdev_balanced
   ) | tee "${eval_log}"
 
   log "GQA done. Eval log: ${eval_log}"
