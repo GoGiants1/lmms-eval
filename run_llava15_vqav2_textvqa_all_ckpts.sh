@@ -10,9 +10,9 @@ SCORE_SCRIPT="${ROOT_DIR}/score_llava15_mmbench_textvqa_scienceqa.py"
 # llava in the wild
 uv pip install openai==0.28.0
 
-BASE_CHECKPOINT_DIR="${BASE_CHECKPOINT_DIR:-/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints}"
+BASE_CHECKPOINT_DIR="${BASE_CHECKPOINT_DIR:-/mnt/tmp/llava}"
 
-MODEL_BASE="${MODEL_BASE:-lmsys/vicuna-7b-v1.5}"
+MODEL_BASE="${MODEL_BASE:-}"
 BENCHMARKS="${BENCHMARKS:-vqav2,textvqa,llava_wild,scienceqa,gqa,mme}" # all => vqav2,textvqa,gqa,mmbench,mmbench_cn,scienceqa,llava_wild,mme
 GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
 SKIP_EXISTING="${SKIP_EXISTING:-1}"
@@ -40,16 +40,22 @@ if [[ -f "${ENV_FILE}" ]]; then
   set +a
 fi
 
-MODEL_PATHS="$(
-  find "${BASE_CHECKPOINT_DIR}" -type f -name adapter_config.json -printf '%h\n' \
-  | grep -Ei '/[^/]*lora[^/]*/?$' \
-  | sort -u \
-  | paste -sd, -
-)"
-
+# Allow MODEL_PATHS to be set externally (for merged models or manual specification)
 if [[ -z "${MODEL_PATHS}" ]]; then
-  echo "[ERROR] No LoRA checkpoints found under: ${BASE_CHECKPOINT_DIR} (path must contain 'lora')" >&2
-  exit 1
+  MODEL_PATHS="$(
+    find "${BASE_CHECKPOINT_DIR}" -type f -name adapter_config.json -printf '%h\n' \
+    | grep -Ei '/[^/]*lora[^/]*/?$' \
+    | sort -u \
+    | paste -sd, -
+  )"
+
+  if [[ -z "${MODEL_PATHS}" ]]; then
+    echo "[ERROR] No LoRA checkpoints found under: ${BASE_CHECKPOINT_DIR} (path must contain 'lora')" >&2
+    echo "[ERROR] Set MODEL_PATHS environment variable manually for merged models." >&2
+    exit 1
+  fi
+else
+  echo "[INFO] Using externally provided MODEL_PATHS" >&2
 fi
 
 echo "[INFO] Running benchmarks: ${BENCHMARKS}"
