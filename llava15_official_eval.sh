@@ -605,8 +605,10 @@ download_gqa() {
   local data_dir="${base_dir}/data"
   local image_dir="${data_dir}/images"
   local image_zip="${CACHE_DIR}/gqa/images.zip"
+  local question_zip="${CACHE_DIR}/gqa/questions1.2.zip"
   local image_url="${GQA_IMAGES_URL:-https://downloads.cs.stanford.edu/nlp/data/gqa/images.zip}"
   local eval_zip_url="${GQA_EVAL_ZIP_URL:-https://nlp.stanford.edu/data/gqa/eval.zip}"
+  local questions_zip_url="${GQA_QUESTIONS_ZIP_URL:-https://downloads.cs.stanford.edu/nlp/data/gqa/questions1.2.zip}"
   local eval_zip="${CACHE_DIR}/gqa/eval_scripts.zip"
   local resolved_image_dir=""
 
@@ -625,6 +627,36 @@ download_gqa() {
   if [[ ! -f "${data_dir}/eval.py" || "${FORCE}" -eq 1 ]]; then
     download_file "${eval_zip_url}" "${eval_zip}"
     extract_zip "${eval_zip}" "${data_dir}"
+  fi
+
+  if [[ ! -f "${data_dir}/testdev_balanced_questions.json" || "${FORCE}" -eq 1 ]]; then
+    download_file "${questions_zip_url}" "${question_zip}"
+    "${PYTHON_CMD[@]}" - "${question_zip}" "${data_dir}" <<'PY'
+import sys
+import zipfile
+from pathlib import Path
+
+zip_path = Path(sys.argv[1])
+data_dir = Path(sys.argv[2])
+
+with zipfile.ZipFile(zip_path) as zf:
+    target = None
+    for name in zf.namelist():
+        if name.endswith("testdev_balanced_questions.json"):
+            target = name
+            break
+    if target is None:
+        raise SystemExit(f"Missing testdev_balanced_questions.json in {zip_path}")
+
+    zf.extract(target, data_dir)
+    extracted = data_dir / target
+    final_path = data_dir / "testdev_balanced_questions.json"
+    if extracted != final_path:
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        extracted.replace(final_path)
+
+print(f"Prepared {data_dir / 'testdev_balanced_questions.json'}")
+PY
   fi
 
   if [[ ! -f "${data_dir}/eval.py" ]]; then
@@ -668,7 +700,11 @@ replacements = [
     ('        scores["validity"].append(toScore(valid))\n', '        # scores["validity"].append(toScore(valid))\n'),
     ('        plausible = belongs(predicted, choices[qid]["plausible"], question)\n', '        # plausible = belongs(predicted, choices[qid]["plausible"], question)\n'),
     ('        scores["plausibility"].append(toScore(plausible))\n', '        # scores["plausibility"].append(toScore(plausible))\n'),
+    ('        if attentions is not None:\n', '        # if attentions is not None:\n'),
     ('            groundingScore = computeGroundingScore(question, scenes[question["imageId"]], attentions[qid])\n', '            # groundingScore = computeGroundingScore(question, scenes[question["imageId"]], attentions[qid])\n'),
+    ('            if groundingScore is not None:\n', '            # if groundingScore is not None:\n'),
+    ('                scores["grounding"].append(groundingScore)\n', '                # scores["grounding"].append(groundingScore)\n'),
+    ('        updateConsistency(qid, question, questions)\n', '        # updateConsistency(qid, question, questions)\n'),
 ]
 
 changes = 0
@@ -694,7 +730,11 @@ else:
         '# scores["validity"].append(toScore(valid))',
         '# plausible = belongs(predicted, choices[qid]["plausible"], question)',
         '# scores["plausibility"].append(toScore(plausible))',
+        '# if attentions is not None:',
         '# groundingScore = computeGroundingScore(question, scenes[question["imageId"]], attentions[qid])',
+        '# if groundingScore is not None:',
+        '# scores["grounding"].append(groundingScore)',
+        '# updateConsistency(qid, question, questions)',
     ]
     if all(marker in updated for marker in patched_markers):
         print("already_patched")
