@@ -469,6 +469,48 @@ require_positive_int() {
   fi
 }
 
+ensure_mme_gt_layout() {
+  local mme_root="$1"
+  local nested_root="${mme_root}/MME_Benchmark"
+  local child=""
+
+  # Some MME releases nest categories one level deeper:
+  # MME_Benchmark_release_version/MME_Benchmark/<category>/...
+  # convert_answer_to_mme.py expects categories directly under MME_Benchmark_release_version.
+  if [[ ! -d "${nested_root}" ]]; then
+    return
+  fi
+
+  local has_direct_category=0
+  for child in "${mme_root}"/*; do
+    [[ -d "${child}" ]] || continue
+    if [[ "$(basename "${child}")" != "MME_Benchmark" ]]; then
+      has_direct_category=1
+      break
+    fi
+  done
+  if [[ "${has_direct_category}" -eq 1 ]]; then
+    return
+  fi
+
+  local linked=0
+  local skipped=0
+  for child in "${nested_root}"/*; do
+    [[ -d "${child}" ]] || continue
+    local category_name
+    category_name="$(basename "${child}")"
+    local category_link="${mme_root}/${category_name}"
+    if [[ -e "${category_link}" ]]; then
+      skipped=$((skipped + 1))
+      continue
+    fi
+    ln -s "MME_Benchmark/${category_name}" "${category_link}"
+    linked=$((linked + 1))
+  done
+
+  log "Prepared MME GT path layout: created ${linked} category link(s), skipped ${skipped}."
+}
+
 parse_gpu_list_or_die() {
   local gpu_list="${GPUS// /}"
   [[ -n "${gpu_list}" ]] || die "No GPU specified. Set --gpus or CUDA_VISIBLE_DEVICES."
@@ -1115,6 +1157,7 @@ run_mme() {
 
   wait_for_jobs_or_die "MME inference" "${pids[@]}"
   merge_chunk_outputs "${merged_file}" "${chunk_dir}" "${chunks}"
+  ensure_mme_gt_layout "${mme_root}"
 
   (
     cd "${EVAL_DIR}/MME"
