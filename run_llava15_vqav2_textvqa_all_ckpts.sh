@@ -7,14 +7,15 @@ ENV_FILE="${ROOT_DIR}/.env"
 SCORE_SCRIPT="${ROOT_DIR}/score_llava15_mmbench_textvqa_scienceqa.py"
 
 BASE_CHECKPOINT_DIR="${BASE_CHECKPOINT_DIR:-/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints}"
+
 MODEL_BASE="${MODEL_BASE:-lmsys/vicuna-7b-v1.5}"
-BENCHMARKS="${BENCHMARKS:-vqav2,textvqa,mmbench,mmbench_cn,llava_wild,scienceqa}" # all => vqav2,textvqa,mmbench,mmbench_cn,scienceqa,llava_wild,mme
+BENCHMARKS="${BENCHMARKS:-vqav2,textvqa,llava_wild,scienceqa,gqa,mme}" # all => vqav2,textvqa,gqa,mmbench,mmbench_cn,scienceqa,llava_wild,mme
 GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
 SKIP_EXISTING="${SKIP_EXISTING:-1}"
 DOWNLOAD_FIRST="${DOWNLOAD_FIRST:-1}" # 1 => run download action before evaluation
 LLAVA_REVIEW="${LLAVA_REVIEW:-1}" # 1 => run llava_wild GPT review (needs OPENAI_API_KEY)
 AGGREGATE_LOCAL="${AGGREGATE_LOCAL:-1}" # 1 => run local aggregate scorer after eval
-AGGREGATE_BENCHMARKS="${AGGREGATE_BENCHMARKS:-mmbench,textvqa,mmbench_cn}"
+AGGREGATE_BENCHMARKS="${AGGREGATE_BENCHMARKS:-textvqa,scienceqa,llava_wild,gqa,mme}" # benchmarks to aggregate locally (must be subset of BENCHMARKS)
 AGGREGATE_OUTPUT_DIR="${AGGREGATE_OUTPUT_DIR:-${ROOT_DIR}/LLaVA/playground/data/eval/aggregates}"
 
 if [[ ! -f "${EVAL_SCRIPT}" ]]; then

@@ -37,6 +37,8 @@ HF_DOWNLOAD_WORKERS=16
 FILE_DOWNLOAD_WORKERS=16
 CURRENT_MODEL_PATH=""
 CURRENT_MODEL_ID=""
+DEFAULT_GQA_SHARED_DATA_DIR="/mnt/tmp/mllm-data-selection/projects/mllm_datasets/common/datasets/gqa"
+GQA_SHARED_DATA_DIR="${GQA_SHARED_DATA_DIR:-${DEFAULT_GQA_SHARED_DATA_DIR}}"
 
 declare -a PYTHON_CMD=()
 declare -a MODEL_PATH_ARGS=()
@@ -69,7 +71,7 @@ Actions:
 
 Options:
   --benchmarks LIST   Comma-separated benchmark list.
-                      Supported: vqav2,textvqa,mmbench,mmbench_cn,scienceqa,llava_wild,mme
+                      Supported: vqav2,textvqa,gqa,mmbench,mmbench_cn,scienceqa,llava_wild,mme
                       Default: all
   --model-path PATH   Single model path or HF id to evaluate.
   --model-paths LIST  Comma-separated model paths/HF ids to evaluate.
@@ -115,7 +117,7 @@ Options:
   -h, --help          Show this help.
 
 Examples:
-  ./llava15_official_eval.sh download --benchmarks vqav2,textvqa,mmbench,mmbench_cn,scienceqa,llava_wild,mme
+  ./llava15_official_eval.sh download --benchmarks vqav2,textvqa,gqa,mmbench,mmbench_cn,scienceqa,llava_wild,mme
   ./llava15_official_eval.sh run --benchmarks vqav2,textvqa --model-path liuhaotian/llava-v1.5-7b --gpus 0,1
   ./llava15_official_eval.sh run --model-scripts llava_7b.sh,llava_7b_2.sh,llava_7b_3.sh
   ./llava15_official_eval.sh run --model-script-tree --checkpoint-roots /path/runA,/path/runB
@@ -210,6 +212,9 @@ normalize_benchmark() {
     textvqa|text-vqa)
       echo "textvqa"
       ;;
+    gqa)
+      echo "gqa"
+      ;;
     mmbench|mmbench_en|mmbench-en)
       echo "mmbench"
       ;;
@@ -234,7 +239,7 @@ normalize_benchmark() {
 resolve_benchmarks() {
   SELECTED_BENCHMARKS=()
   if [[ "${BENCHMARKS}" == "all" ]]; then
-    SELECTED_BENCHMARKS=("vqav2" "textvqa" "mmbench" "mmbench_cn" "scienceqa" "llava_wild" "mme")
+    SELECTED_BENCHMARKS=("vqav2" "textvqa" "gqa" "mmbench" "mmbench_cn" "scienceqa" "llava_wild" "mme")
     return
   fi
 
@@ -424,6 +429,37 @@ require_dir() {
   [[ -d "${dir_path}" ]] || die "Missing required directory: ${dir_path}. Run download action first."
 }
 
+dir_has_images() {
+  local dir_path="$1"
+  [[ -d "${dir_path}" ]] || return 1
+  compgen -G "${dir_path}/*.jpg" >/dev/null 2>&1 && return 0
+  compgen -G "${dir_path}/*.jpeg" >/dev/null 2>&1 && return 0
+  compgen -G "${dir_path}/*.png" >/dev/null 2>&1 && return 0
+  return 1
+}
+
+resolve_gqa_image_dir() {
+  local -a candidates=()
+  if [[ -n "${GQA_IMAGE_DIR:-}" ]]; then
+    candidates+=("${GQA_IMAGE_DIR}")
+  fi
+  if [[ -n "${GQA_SHARED_DATA_DIR:-}" ]]; then
+    candidates+=("${GQA_SHARED_DATA_DIR}/images" "${GQA_SHARED_DATA_DIR}")
+  fi
+  candidates+=("/mnt/tmp/mllm-data-selection/projects/mllm_datasets/common/datasets/gqa/images")
+  candidates+=("/mnt/tmp/mllm-data-selection/projects/mllm_datasets/common/datasets/gqa")
+  candidates+=("${EVAL_DIR}/gqa/data/images")
+
+  local candidate=""
+  for candidate in "${candidates[@]}"; do
+    if dir_has_images "${candidate}"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 require_positive_int() {
   local opt_name="$1"
   local opt_value="$2"
@@ -519,6 +555,39 @@ download_textvqa() {
   download_file "https://dl.fbaipublicfiles.com/textvqa/images/train_val_images.zip" "${image_zip}"
   mkdir -p "${EVAL_DIR}/textvqa"
   extract_zip "${image_zip}" "${EVAL_DIR}/textvqa"
+}
+
+download_gqa() {
+  local base_dir="${EVAL_DIR}/gqa"
+  local data_dir="${base_dir}/data"
+  local image_dir="${data_dir}/images"
+  local image_zip="${CACHE_DIR}/gqa/images.zip"
+  local image_url="${GQA_IMAGES_URL:-https://downloads.cs.stanford.edu/nlp/data/gqa/images.zip}"
+  local eval_zip_url="${GQA_EVAL_ZIP_URL:-https://nlp.stanford.edu/data/gqa/eval.zip}"
+  local eval_zip="${CACHE_DIR}/gqa/eval_scripts.zip"
+  local resolved_image_dir=""
+
+  mkdir -p "${data_dir}"
+
+  resolved_image_dir="$(resolve_gqa_image_dir || true)"
+  if [[ -n "${resolved_image_dir}" ]]; then
+    log "Use existing GQA images: ${resolved_image_dir}"
+  elif [[ ! -d "${image_dir}" || "${FORCE}" -eq 1 ]]; then
+    download_file "${image_url}" "${image_zip}"
+    extract_zip "${image_zip}" "${data_dir}"
+  else
+    log "Skip GQA images (already exists): ${image_dir}"
+  fi
+
+  if [[ ! -f "${data_dir}/eval/eval.py" || "${FORCE}" -eq 1 ]]; then
+    download_file "${eval_zip_url}" "${eval_zip}"
+    extract_zip "${eval_zip}" "${data_dir}"
+  fi
+
+  if [[ ! -f "${data_dir}/eval/eval.py" ]]; then
+    log "GQA eval script missing: ${data_dir}/eval/eval.py"
+    log "Follow LLaVA/docs/Evaluation.md and place official GQA evaluation scripts under ${data_dir}."
+  fi
 }
 
 download_mmbench() {
@@ -688,6 +757,57 @@ run_textvqa() {
     --result-file "./playground/data/eval/textvqa/answers/${CURRENT_MODEL_ID}.jsonl"
 
   log "TextVQA done. Answer file: ${EVAL_DIR}/textvqa/answers/${CURRENT_MODEL_ID}.jsonl"
+}
+
+run_gqa() {
+  local split="llava_gqa_testdev_balanced"
+  local gqa_image_dir=""
+  require_file "${EVAL_DIR}/gqa/${split}.jsonl"
+  require_file "${EVAL_DIR}/gqa/data/eval/eval.py"
+  gqa_image_dir="$(resolve_gqa_image_dir || true)"
+  [[ -n "${gqa_image_dir}" ]] || die "GQA image directory not found. Set GQA_IMAGE_DIR or prepare ${EVAL_DIR}/gqa/data/images (or ${GQA_SHARED_DATA_DIR}/images)."
+  require_dir "${gqa_image_dir}"
+
+  parse_gpu_list_or_die
+  local gpu_list="${GPUS// /}"
+  local chunks="${#PARSED_GPUS[@]}"
+  local chunk_dir="${EVAL_DIR}/gqa/answers/${split}/${CURRENT_MODEL_ID}"
+  local merged_file="${chunk_dir}/merge.jsonl"
+  local per_model_pred="${EVAL_DIR}/gqa/data/testdev_balanced_predictions_${CURRENT_MODEL_ID}.json"
+  local eval_log="${EVAL_DIR}/gqa/eval_logs/${CURRENT_MODEL_ID}.log"
+  log "Running GQA with ${chunks} chunk(s) on GPU list: ${gpu_list}"
+  log "GQA image root: ${gqa_image_dir}"
+
+  local -a pids=()
+  local idx=0
+  for idx in "${!PARSED_GPUS[@]}"; do
+    CUDA_VISIBLE_DEVICES="${PARSED_GPUS[${idx}]}" run_from_llava -m llava.eval.model_vqa_loader \
+      "${MODEL_PATH_ARGS[@]}" \
+      --question-file "./playground/data/eval/gqa/${split}.jsonl" \
+      --image-folder "${gqa_image_dir}" \
+      --answers-file "./playground/data/eval/gqa/answers/${split}/${CURRENT_MODEL_ID}/${chunks}_${idx}.jsonl" \
+      --num-chunks "${chunks}" \
+      --chunk-idx "${idx}" \
+      --temperature 0 \
+      --conv-mode "${CONV_MODE}" &
+    pids+=("$!")
+  done
+
+  wait_for_jobs_or_die "GQA inference" "${pids[@]}"
+  merge_chunk_outputs "${merged_file}" "${chunk_dir}" "${chunks}"
+
+  run_from_llava scripts/convert_gqa_for_eval.py \
+    --src "./playground/data/eval/gqa/answers/${split}/${CURRENT_MODEL_ID}/merge.jsonl" \
+    --dst "./playground/data/eval/gqa/data/testdev_balanced_predictions_${CURRENT_MODEL_ID}.json"
+
+  mkdir -p "${EVAL_DIR}/gqa/eval_logs"
+  (
+    cd "${EVAL_DIR}/gqa/data"
+    cp "${per_model_pred}" "./testdev_balanced_predictions.json"
+    "${PYTHON_CMD[@]}" eval/eval.py --tier testdev_balanced
+  ) | tee "${eval_log}"
+
+  log "GQA done. Eval log: ${eval_log}"
 }
 
 run_mmbench() {
@@ -867,8 +987,18 @@ run_llava_wild() {
 }
 
 run_mme() {
+  local mme_root="${EVAL_DIR}/MME/MME_Benchmark_release_version"
+  local mme_image_root=""
+  if [[ -d "${mme_root}/MME_Benchmark" ]]; then
+    # Official MME release layout: image paths in llava_mme.jsonl are relative to MME_Benchmark/.
+    mme_image_root="${mme_root}/MME_Benchmark"
+  else
+    # Fallback for custom/flattened layouts.
+    mme_image_root="${mme_root}"
+  fi
+
   require_file "${EVAL_DIR}/MME/llava_mme.jsonl"
-  require_dir "${EVAL_DIR}/MME/MME_Benchmark_release_version"
+  require_dir "${mme_image_root}"
   require_file "${EVAL_DIR}/MME/convert_answer_to_mme.py"
   require_file "${EVAL_DIR}/MME/eval_tool/calculation.py"
 
@@ -878,6 +1008,7 @@ run_mme() {
   local chunk_dir="${EVAL_DIR}/MME/answers_chunks/${CURRENT_MODEL_ID}"
   local merged_file="${EVAL_DIR}/MME/answers/${CURRENT_MODEL_ID}.jsonl"
   log "Running MME with ${chunks} chunk(s) on GPU list: ${gpu_list}"
+  log "MME image root: ${mme_image_root}"
 
   local -a pids=()
   local idx=0
@@ -885,7 +1016,7 @@ run_mme() {
     CUDA_VISIBLE_DEVICES="${PARSED_GPUS[${idx}]}" run_from_llava -m llava.eval.model_vqa_loader \
       "${MODEL_PATH_ARGS[@]}" \
       --question-file "./playground/data/eval/MME/llava_mme.jsonl" \
-      --image-folder "./playground/data/eval/MME/MME_Benchmark_release_version" \
+      --image-folder "${mme_image_root}" \
       --answers-file "./playground/data/eval/MME/answers_chunks/${CURRENT_MODEL_ID}/${chunks}_${idx}.jsonl" \
       --num-chunks "${chunks}" \
       --chunk-idx "${idx}" \
@@ -901,10 +1032,12 @@ run_mme() {
     cd "${EVAL_DIR}/MME"
     "${PYTHON_CMD[@]}" convert_answer_to_mme.py --experiment "${CURRENT_MODEL_ID}"
     cd eval_tool
-    "${PYTHON_CMD[@]}" calculation.py --results_dir "answers/${CURRENT_MODEL_ID}"
+    mkdir -p "../eval_logs"
+    "${PYTHON_CMD[@]}" calculation.py --results_dir "answers/${CURRENT_MODEL_ID}" | tee "../eval_logs/${CURRENT_MODEL_ID}.log"
   )
 
   log "MME done. Result dir: ${EVAL_DIR}/MME/eval_tool/answers/${CURRENT_MODEL_ID}"
+  log "MME eval log: ${EVAL_DIR}/MME/eval_logs/${CURRENT_MODEL_ID}.log"
 }
 
 benchmark_result_exists() {
@@ -915,6 +1048,9 @@ benchmark_result_exists() {
       ;;
     textvqa)
       [[ -f "${EVAL_DIR}/textvqa/answers/${CURRENT_MODEL_ID}.jsonl" ]]
+      ;;
+    gqa)
+      [[ -f "${EVAL_DIR}/gqa/eval_logs/${CURRENT_MODEL_ID}.log" || -f "${EVAL_DIR}/gqa/answers/llava_gqa_testdev_balanced/${CURRENT_MODEL_ID}/merge.jsonl" || -f "${EVAL_DIR}/gqa/answers/llava_gqa_testdev_balanced/${CURRENT_MODEL_ID}.jsonl" ]]
       ;;
     mmbench)
       [[ -f "${EVAL_DIR}/mmbench/answers/mmbench_dev_20230712/${CURRENT_MODEL_ID}.jsonl" ]]
@@ -933,7 +1069,7 @@ benchmark_result_exists() {
       fi
       ;;
     mme)
-      [[ -f "${EVAL_DIR}/MME/answers/${CURRENT_MODEL_ID}.jsonl" ]]
+      [[ -f "${EVAL_DIR}/MME/eval_logs/${CURRENT_MODEL_ID}.log" || -f "${EVAL_DIR}/MME/answers/${CURRENT_MODEL_ID}.jsonl" ]]
       ;;
     *)
       return 1
@@ -950,6 +1086,9 @@ download_one_benchmark() {
       ;;
     textvqa)
       download_textvqa
+      ;;
+    gqa)
+      download_gqa
       ;;
     mmbench)
       download_mmbench
@@ -1027,6 +1166,9 @@ run_selected() {
         ;;
       textvqa)
         run_textvqa
+        ;;
+      gqa)
+        run_gqa
         ;;
       mmbench)
         run_mmbench
