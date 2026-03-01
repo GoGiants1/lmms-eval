@@ -39,6 +39,7 @@ CURRENT_MODEL_PATH=""
 CURRENT_MODEL_ID=""
 DEFAULT_GQA_SHARED_DATA_DIR="/mnt/tmp/mllm-data-selection/projects/mllm_datasets/common/datasets/gqa"
 GQA_SHARED_DATA_DIR="${GQA_SHARED_DATA_DIR:-${DEFAULT_GQA_SHARED_DATA_DIR}}"
+GQA_EVAL_AUTO_PATCH="${GQA_EVAL_AUTO_PATCH:-1}" # 1 => apply GQA v1.2 eval.py compatibility patch automatically.
 
 declare -a PYTHON_CMD=()
 declare -a MODEL_PATH_ARGS=()
@@ -587,7 +588,93 @@ download_gqa() {
   if [[ ! -f "${data_dir}/eval.py" ]]; then
     log "GQA eval script missing: ${data_dir}/eval.py"
     log "Follow LLaVA/docs/Evaluation.md and place official GQA evaluation scripts under ${data_dir}."
+    return
   fi
+
+  ensure_gqa_eval_patch
+}
+
+ensure_gqa_eval_patch() {
+  if [[ "${GQA_EVAL_AUTO_PATCH}" != "1" ]]; then
+    return
+  fi
+
+  local eval_py="${EVAL_DIR}/gqa/data/eval.py"
+  if [[ ! -f "${eval_py}" ]]; then
+    log "Skip GQA eval.py auto patch (missing file): ${eval_py}"
+    return
+  fi
+
+  local patch_status=""
+  patch_status="$("${PYTHON_CMD[@]}" - "${eval_py}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+replacements = [
+    (
+        'parser.add_argument(\'--questions\',      default="{tier}_all_questions.json", type = str,    help = "Questions file name format.")\n',
+        'parser.add_argument(\'--questions\',      default="{tier}_questions.json", type = str,    help = "Questions file name format.")\n',
+    ),
+    ('print("Loading scene graphs...")\n', '# print("Loading scene graphs...")\n'),
+    ('scenes = loadFile(args.scenes.format(tier = args.tier))\n', '# scenes = loadFile(args.scenes.format(tier = args.tier))\n'),
+    ('print("Loading choices...")\n', '# print("Loading choices...")\n'),
+    ('choices = loadFile(args.choices.format(tier = args.tier))\n', '# choices = loadFile(args.choices.format(tier = args.tier))\n'),
+    ('        valid = belongs(predicted, choices[qid]["valid"], question)\n', '        # valid = belongs(predicted, choices[qid]["valid"], question)\n'),
+    ('        scores["validity"].append(toScore(valid))\n', '        # scores["validity"].append(toScore(valid))\n'),
+    ('        plausible = belongs(predicted, choices[qid]["plausible"], question)\n', '        # plausible = belongs(predicted, choices[qid]["plausible"], question)\n'),
+    ('        scores["plausibility"].append(toScore(plausible))\n', '        # scores["plausibility"].append(toScore(plausible))\n'),
+    ('            groundingScore = computeGroundingScore(question, scenes[question["imageId"]], attentions[qid])\n', '            # groundingScore = computeGroundingScore(question, scenes[question["imageId"]], attentions[qid])\n'),
+]
+
+changes = 0
+for idx, line in enumerate(lines):
+    for old, new in replacements:
+        if line == old:
+            lines[idx] = new
+            changes += 1
+            break
+
+updated = "".join(lines)
+if changes > 0:
+    path.write_text(updated, encoding="utf-8")
+    print(f"patched:{changes}")
+else:
+    patched_markers = [
+        'default="{tier}_questions.json"',
+        '# print("Loading scene graphs...")',
+        '# scenes = loadFile(args.scenes.format(tier = args.tier))',
+        '# print("Loading choices...")',
+        '# choices = loadFile(args.choices.format(tier = args.tier))',
+        '# valid = belongs(predicted, choices[qid]["valid"], question)',
+        '# scores["validity"].append(toScore(valid))',
+        '# plausible = belongs(predicted, choices[qid]["plausible"], question)',
+        '# scores["plausibility"].append(toScore(plausible))',
+        '# groundingScore = computeGroundingScore(question, scenes[question["imageId"]], attentions[qid])',
+    ]
+    if all(marker in updated for marker in patched_markers):
+        print("already_patched")
+    else:
+        print("no_changes")
+PY
+)"
+
+  case "${patch_status}" in
+    patched:*)
+      log "Applied GQA eval.py compatibility patch (${patch_status#patched:} edits): ${eval_py}"
+      ;;
+    already_patched)
+      log "GQA eval.py compatibility patch already present: ${eval_py}"
+      ;;
+    no_changes)
+      log "GQA eval.py auto patch skipped (unexpected file format): ${eval_py}"
+      ;;
+    *)
+      log "GQA eval.py auto patch status: ${patch_status}"
+      ;;
+  esac
 }
 
 download_mmbench() {
@@ -764,6 +851,7 @@ run_gqa() {
   local gqa_image_dir=""
   require_file "${EVAL_DIR}/gqa/${split}.jsonl"
   require_file "${EVAL_DIR}/gqa/data/eval.py"
+  ensure_gqa_eval_patch
   gqa_image_dir="$(resolve_gqa_image_dir || true)"
   [[ -n "${gqa_image_dir}" ]] || die "GQA image directory not found. Set GQA_IMAGE_DIR or prepare ${EVAL_DIR}/gqa/data/images (or ${GQA_SHARED_DATA_DIR}/images)."
   require_dir "${gqa_image_dir}"
