@@ -44,7 +44,7 @@ MERGED_ROOT=${MERGED_ROOT:-/mnt/tmp/llava}
 # Example:
 #   EVAL_CHECKPOINT_TREE=1 CHECKPOINT_ROOTS=/path/runA,/path/runB ./llava_7b.sh
 EVAL_CHECKPOINT_TREE=${EVAL_CHECKPOINT_TREE:-1}
-CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/llava-v1.5-7b-lora-v2-llava-selected-t050-ranges-r20-5methods}
+CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints}
 DEFAULT_CHECKPOINT_ROOTS=(
 	# "/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/checkpoints/llava-v1.5-7b-lora-v2"
 	# "/mnt/tmp/mllm-data-selection/projects/LLaVA/checkpoints/checkpoints/llava-v1.5-7b-lora-v2-vision-flan"
