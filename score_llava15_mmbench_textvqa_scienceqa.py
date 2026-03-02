@@ -349,33 +349,18 @@ def eval_llava_wild(review_dir: Path, model_ids: Optional[set]) -> List[EvalRow]
     return rows
 
 
-def _extract_percent_like_score(log_text: str, keywords: Sequence[str]) -> Optional[Tuple[float, str]]:
-    best: Optional[Tuple[int, int, float, str]] = None  # (priority, order, score, line)
-    order = 0
-
+def _extract_gqa_accuracy_score(log_text: str) -> Optional[Tuple[float, str]]:
+    # GQA official eval prints a dedicated line like: "Accuracy: 49.55%".
+    # Parse only this line to avoid false positives from unrelated numbers in logs/URLs.
     for raw_line in log_text.splitlines():
         line = raw_line.strip()
-        lower = line.lower()
-        if not any(keyword in lower for keyword in keywords):
+        match = re.match(r"^accuracy\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*%?\s*$", line, flags=re.IGNORECASE)
+        if match is None:
             continue
-
-        for match in re.finditer(r"(-?\d+(?:\.\d+)?)\s*(%)?", line):
-            order += 1
-            value = float(match.group(1))
-            if value < 0:
-                continue
-            score = value if value > 1.0 or match.group(2) == "%" else value * 100.0
-            if not (0.0 <= score <= 100.0):
-                continue
-
-            priority = 2 if "acc" in lower or "accuracy" in lower else 1
-            candidate = (priority, order, score, line)
-            if best is None or (candidate[0], candidate[1]) > (best[0], best[1]):
-                best = candidate
-
-    if best is None:
-        return None
-    return best[2], best[3]
+        score = float(match.group(1))
+        if 0.0 <= score <= 100.0:
+            return score, line
+    return None
 
 
 def _count_lines(path: Path) -> int:
@@ -406,7 +391,7 @@ def eval_gqa(log_dir: Path, answer_root: Path, split: str, model_ids: Optional[s
     rows: List[EvalRow] = []
     for model_id, log_file in log_files:
         log_text = log_file.read_text(encoding="utf-8", errors="ignore")
-        parsed_score = _extract_percent_like_score(log_text, keywords=("acc", "accuracy", "score"))
+        parsed_score = _extract_gqa_accuracy_score(log_text)
         answer_file = _resolve_gqa_answer_file(answer_root, split, model_id)
         total = _count_lines(answer_file) if answer_file is not None else 0
 
