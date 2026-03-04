@@ -27,7 +27,7 @@ datasets=(
     lmms-lab/MME
     lmms-lab/ScienceQA
     lmms-lab/POPE
-    lmms-lab/VQAv2
+    # lmms-lab/VQAv2
     lmms-lab/textvqa
     lmms-lab/MMBench
     lmms-lab/GQA
